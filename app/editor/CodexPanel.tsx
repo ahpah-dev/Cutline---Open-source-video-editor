@@ -10,9 +10,10 @@ export function CodexPanel({ codex, desktop, ready, canUndo, undo, close }: Prop
   const bottom = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null);
   const { status, messages, activity, error, connecting } = codex;
   const working = status.busy || submitting;
+  const modelsAvailable = status.models.length > 0;
   useEffect(() => { bottom.current?.scrollIntoView({ block: "end" }); }, [messages, activity]);
   const submit = async () => {
-    if (working || !prompt.trim()) return;
+    if (working || !modelsAvailable || !prompt.trim()) return;
     const value = prompt; setPrompt(""); setSubmitting(true);
     try { if (!await codex.send(value)) setPrompt(value); }
     finally { setSubmitting(false); input.current?.focus(); }
@@ -33,7 +34,7 @@ export function CodexPanel({ codex, desktop, ready, canUndo, undo, close }: Prop
           {connecting ? <LoaderCircle className="spin" size={16} /> : <PlugZap size={16} />}
           {connecting ? "Connecting…" : status.needsLogin ? "Sign in to Codex" : "Connect Codex"}
         </button>
-        <small>Uses your Codex account and plan. Existing sign-in is reused. If needed, Connect downloads the official Codex runtime once (~325 MB installed). Project metadata and requested preview frames are sent to Codex; original media files stay local.</small>
+        <small>Uses your Codex account and plan. Existing sign-in is reused. If needed, Connect downloads or updates the official Codex runtime. Project metadata and requested preview frames are sent to Codex; original media files stay local.</small>
       </div> : <>
         <div className="codex-session">
           <span className="codex-connected"><i /> Connected {status.account?.planType ? `· ${status.account.planType}` : ""}</span>
@@ -47,10 +48,11 @@ export function CodexPanel({ codex, desktop, ready, canUndo, undo, close }: Prop
           <div ref={bottom} />
         </div>
         <form className="codex-composer" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-          <textarea ref={input} aria-label="Describe your video edit" value={prompt} maxLength={20000} placeholder="Tell Codex how to edit your video…" onChange={(event) => setPrompt(event.target.value)} disabled={!ready} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} />
+          {!modelsAvailable && <div role="alert"><p>No supported models were returned for this account. GPT-5.6 and GPT-5.5 are no longer offered.</p><button type="button" className="button" disabled={connecting} onClick={() => void codex.connect()}>Refresh models</button></div>}
+          <textarea ref={input} aria-label="Describe your video edit" value={prompt} maxLength={20000} placeholder="Tell Codex how to edit your video…" onChange={(event) => setPrompt(event.target.value)} disabled={!ready || !modelsAvailable} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} />
           <div className="codex-composer-tools">
-            <select aria-label="Codex model" value={codex.model} disabled={working} onChange={(event) => codex.setModel(event.target.value)}><option value="">Default model</option>{status.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select>
-            {working ? <button type="button" className="codex-send" aria-label="Stop Codex edit" title="Stop" onClick={() => void codex.stop()}><Square size={14} /></button> : <button type="submit" className="codex-send" aria-label="Send edit to Codex" disabled={!ready || !prompt.trim()} title="Send · Enter"><ArrowUp size={18} /></button>}
+            <select aria-label="Codex model" value={status.models.some((model) => model.id === codex.model) ? codex.model : ""} disabled={working || !modelsAvailable} onChange={(event) => codex.setModel(event.target.value)}><option value="">{modelsAvailable ? `Default · ${(status.models.find((model) => model.isDefault) || status.models[0]).name}` : "No available models"}</option>{status.models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select>
+            {working ? <button type="button" className="codex-send" aria-label="Stop Codex edit" title="Stop" onClick={() => void codex.stop()}><Square size={14} /></button> : <button type="submit" className="codex-send" aria-label="Send edit to Codex" disabled={!ready || !modelsAvailable || !prompt.trim()} title="Send · Enter"><ArrowUp size={18} /></button>}
           </div>
           <div className="codex-composer-footer"><span>{status.account?.type === "apiKey" ? "Using existing API-key sign-in · API charges apply" : "Enter to send · Shift+Enter for a new line"}</span><button type="button" disabled={!canUndo || working} onClick={undo} title="Undo the last edit"><RotateCcw size={12} /> Undo</button></div>
         </form>

@@ -1,17 +1,19 @@
-# Cutline 0.4.0
+# Cutline 0.4.1
 
 A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files stay local; the optional assistant receives project metadata and preview frames it requests.
 
 ## Edit your video with Codex (Windows)
 
 1. Open Cutline and import your media as usual.
-2. Click **Codex** in the top bar, then **Connect Codex**. Cutline finds an existing supported Codex desktop/CLI installation and reuses its sign-in. If none is found, it downloads and verifies the official Windows x64 runtime automatically (about 325 MB installed, separate from the editor).
+2. Click **Codex** in the top bar, then **Connect Codex**. Cutline reuses your sign-in and a supported Codex desktop/CLI installation (0.160.0 or newer). If your installed runtime is missing or outdated, it automatically downloads and verifies a private official Windows x64 runtime, including the required tool host (about 383 MB installed, separate from the editor). Your existing Codex installation is not changed.
 3. If prompted, click **Sign in to Codex** and finish the normal browser sign-in. No API key, npm, terminal commands or configuration files are needed.
 4. Describe your edit in the panel. For example: “Make a 15-second vertical edit using the imported clips. Add a centered gradient title with Letter Pop In, a slow zoom, and smooth dissolves between the cuts.” Select clips manually when you want to target them. Enter sends; Shift+Enter adds a new line.
 
 Codex works directly on the open timeline. Its editing tools expose exact item IDs, frame-aligned seconds, imported assets, installed fonts, preset names, text styling/gradients, clip transforms/color/audio, animation stacks, Combo loops, effects, genuine two-sided transitions, splits, freeze frames, duplication/deletion, layer mute/hide, and property keyframes. It can inspect rendered preview frames and open the regular export settings. Import and final save location remain under your control.
 
 Each validated batch commits together and undoes in one step. A project/revision check refuses stale edits after manual changes; pending tool calls are cancelled on Stop or Disconnect, and requests for a different open project are rejected. You can keep editing manually, close the panel to return to the inspector, switch models from the account's available list, or start a new chat. Chats are session-only, while timeline edits are autosaved normally. AI can make mistakes: review the result and use Undo or make a backup before a large edit.
+
+The updated model picker discovers GPT-6.1 Sol, GPT-6 Astra, GPT-6 Sol and GPT-6 Luna when returned by your account, with GPT-6.1 Sol as the current runtime default. GPT-5.6 and GPT-5.5 have been removed and are never used as a fallback. Model availability still depends on your account/workspace. After updating Cutline, reconnect Codex to refresh the list and finish the runtime upgrade if prompted. The model list is fully paginated; unavailable models are not fabricated in the picker. GPT-6.1 Sol and GPT-6 Luna each passed a live Windows edit, rendered preview and undo test for this release; Astra and GPT-6 Sol were returned by the signed-in account's catalog but were not separately inference-tested.
 
 ![Codex connection panel](docs/screenshots/codex-setup.png)
 
@@ -64,6 +66,6 @@ npm run desktop:dist
 
 ## Verification for this release
 
-The model/component/protocol and rendering/export suites cover atomic AI batches, exact IDs, stale revisions, invalid operations, preview frames, undo/redo and persistence, plus the existing animation/effect/transition/audio/export features. A real production Windows run reused Codex sign-in, edited an isolated timeline with a requested title, checked a rendered preview, and undid the edit. The automatic official runtime download was checksum-verified and its extracted executable started successfully; only the needed executable is retained. Type checking and the server-rendered shell are checked during release packaging.
+The model/component/protocol and rendering/export suites cover atomic AI batches, exact IDs, stale revisions, invalid operations, preview frames, undo/redo and persistence, plus the existing animation/effect/transition/audio/export features. A real production Windows run reused Codex sign-in, edited an isolated timeline with a requested title, checked a rendered preview, and undid the edit. The automatic official runtime download was checksum-verified; only the main executable and required tool host are retained. Runtime-version gating, paginated model discovery, removed-model rejection and empty catalogs have automated coverage. Type checking and the server-rendered shell are checked during release packaging.
 
 An isolated Windows production run completed Whisper transcription with CDN requests deliberately blocked and a fresh model download. Isolated Electron screenshots and pointer selection were checked with synthetic media. Timeline component tests simulate pointer events and verify exact clip state/position; they are not a substitute for broad human/device testing. 4K/60 fps and long-project performance are not certified.

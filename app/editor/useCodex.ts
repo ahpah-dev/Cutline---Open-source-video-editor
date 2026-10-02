@@ -158,7 +158,7 @@ export function useCodex(options: Options) {
     sending.current = true; setError(""); setActivity("Thinking…");
     const id = crypto.randomUUID();
     setMessages((previous) => [...previous, { id, role: "user", text: prompt.trim() }]);
-    try { await native.codexSend(prompt, current.current.project.id, model || undefined); return true; }
+    try { await native.codexSend(prompt, current.current.project.id, status.models.some((value) => value.id === model) ? model : undefined); return true; }
     catch (error) { setError((error as Error).message); setActivity(""); return false; }
     finally { sending.current = false; }
   };

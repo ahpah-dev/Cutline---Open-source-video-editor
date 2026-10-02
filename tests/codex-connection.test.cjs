@@ -3,10 +3,10 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
 const path = require("node:path");
-const { CodexConnection, extractCodex } = require("../electron/codex.cjs");
+const { CodexConnection, extractCodex, supportedCodexVersion, CODEX_VERSION } = require("../electron/codex.cjs");
 const TOOLS = ["get_project", "get_catalog", "apply_edits", "preview", "history", "open_export"].map((name) => ({ type: "function", name: "cutline_" + name, inputSchema: { type: "object", properties: {} } }));
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
-function fixture() {
+function fixture(modelPages = [{ data: [{ model: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", isDefault: true }] }]) {
   const requests = [], results = [], events = [], called = [];
   const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill() { this.emit("exit", 0); } });
   const send = (value) => child.stdout.write(JSON.stringify(value) + "\n");
@@ -17,7 +17,7 @@ function fixture() {
       requests.push(message);
       if (!message.id) continue;
       const response = message.method === "account/read" ? { account: { type: "chatgpt", email: "example@test.invalid", planType: "plus" } }
-        : message.method === "model/list" ? { data: [{ model: "test-model", displayName: "Test", isDefault: true }] }
+        : message.method === "model/list" ? modelPages[message.params.cursor ? Number(message.params.cursor) : 0]
         : message.method === "config/read" ? { config: { mcp_servers: { other_service: { command: "example", tool_timeout_sec: null } } } }
         : message.method === "thread/start" ? { thread: { id: "thread" } }
         : message.method === "turn/start" ? { turn: { id: "turn" } }
@@ -26,17 +26,18 @@ function fixture() {
       if (message.method === "turn/interrupt") send({ method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", status: "interrupted" } } });
     }
   });
-  const connection = new CodexConnection({ userData: path.resolve("work/mock-codex"), version: "0.4.0", executable: "mock", spawnServer: () => child, emit: (event) => events.push(event), runTool: async (...args) => { called.push(args); return { success: true, contentItems: [{ type: "inputText", text: "ok" }] }; } });
-  return { connection, requests, results, events, called, send };
+  const launches = [];
+  const connection = new CodexConnection({ userData: path.resolve("work/mock-codex"), version: "0.4.1", executable: "mock", spawnServer: (...args) => { launches.push(args); return child; }, emit: (event) => events.push(event), runTool: async (...args) => { called.push(args); return { success: true, contentItems: [{ type: "inputText", text: "ok" }] }; } });
+  return { connection, requests, results, events, called, send, launches };
 }
 test("Codex handshake, model list, ephemeral tool-only thread and message streaming", async () => {
   const f = fixture();
   try {
     const status = await f.connection.connect(TOOLS);
     assert.equal(status.connected, true); assert.equal(status.needsLogin, false);
-    assert.equal(status.models[0].id, "test-model");
+    assert.equal(status.models[0].id, "gpt-6.1-sol");
     assert.equal(f.requests[0].params.capabilities.experimentalApi, true);
-    await f.connection.send("Edit my video", "project", "test-model");
+    await f.connection.send("Edit my video", "project", "gpt-6.1-sol");
     const thread = f.requests.find((request) => request.method === "thread/start").params;
     assert.equal(thread.ephemeral, true); assert.equal(thread.sandbox, "read-only");
     assert.deepEqual(thread.environments, []); assert.equal(thread.config["features.shell_tool"], false);
@@ -44,6 +45,10 @@ test("Codex handshake, model list, ephemeral tool-only thread and message stream
     assert.equal(thread.config.mcp_servers.other_service.command, "example");
     assert.ok(!("tool_timeout_sec" in thread.config.mcp_servers.other_service));
     assert.equal(thread.config["features.apps"], false);
+    assert.equal(thread.config["features.code_mode_host"], true);
+    assert.ok(f.launches[0][1].includes("shell_tool"));
+    assert.ok(f.launches[0][1].includes("multi_agent"));
+    assert.equal(f.launches[0][1][f.launches[0][1].indexOf("code_mode_host") - 1], "--enable");
     assert.deepEqual(thread.dynamicTools, TOOLS);
     f.send({ id: 100, method: "item/tool/call", params: { threadId: "thread", turnId: "turn", tool: "cutline_get_project", arguments: {} } });
     await tick(); assert.equal(f.called.length, 1); assert.equal(f.results[0].result.success, true);
@@ -89,6 +94,43 @@ test("Codex archive extraction only returns the executable and rejects truncated
   const header = Buffer.alloc(512); header.write("package/vendor/windows/codex/codex.exe"); header.write("00000000004", 124); header[156] = 48;
   const archive = Buffer.concat([header, Buffer.from("MZok"), Buffer.alloc(508)]);
   assert.equal(extractCodex(archive).toString(), "MZok");
+  const hostHeader = Buffer.from(header); hostHeader.fill(0, 0, 100); hostHeader.write("package/vendor/windows/bin/codex-code-mode-host.exe");
+  const bundled = Buffer.concat([archive, hostHeader, Buffer.from("MZhi"), Buffer.alloc(508)]);
+  assert.equal(extractCodex(bundled, "codex-code-mode-host.exe").toString(), "MZhi");
+  assert.throws(() => extractCodex(archive, "codex-code-mode-host.exe"), /did not contain/);
   assert.throws(() => extractCodex(archive.subarray(0, 514)), /Invalid Codex/);
   assert.throws(() => extractCodex(Buffer.alloc(512)), /did not contain/);
+});
+test("Codex runtime gate rejects outdated and prerelease binaries", () => {
+  assert.equal(CODEX_VERSION, "0.160.0");
+  for (const value of ["0.144.5", "0.159.0", "0.159.3", "0.160.0-alpha.1"]) assert.equal(supportedCodexVersion("codex-cli " + value), false);
+  for (const value of ["0.160.0", "0.160.1", "0.161.0", "1.0.0"]) assert.equal(supportedCodexVersion("codex-cli " + value + "\n"), true);
+  assert.equal(supportedCodexVersion("not codex-cli 0.160.0"), false);
+});
+test("Codex paginates models, removes GPT-5.6/5.5, and never defaults to them", async () => {
+  const f = fixture([
+    { data: [{ model: "gpt-5.6-sol", isDefault: true }, { model: "gpt-5.5" }, { model: "gpt-6-astra", displayName: "GPT-6 Astra" }], nextCursor: "1" },
+    { data: [{ model: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", isDefault: true }, { model: "gpt-6-luna", displayName: "GPT-6 Luna" }, { model: "gpt-6-hidden", hidden: true }, { model: "gpt-5.6-terra" }, { model: "gpt-5.6-luna" }, { model: "gpt-6-astra" }], nextCursor: null },
+  ]);
+  try {
+    const state = await f.connection.connect(TOOLS);
+    assert.deepEqual(state.models.map((model) => model.id), ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]);
+    assert.equal(f.requests.filter((request) => request.method === "model/list").length, 2);
+    await assert.rejects(f.connection.send("Edit", "project", "gpt-5.6-sol"), /available Codex model/);
+    await f.connection.send("Edit", "project");
+    assert.equal(f.requests.find((request) => request.method === "thread/start").params.model, "gpt-6.1-sol");
+  } finally { f.connection.disconnect(); }
+});
+test("Codex fails safely when account only returns removed models", async () => {
+  const f = fixture([{ data: [{ model: "gpt-5.6-sol", isDefault: true }, { model: "gpt-5.5" }] }]);
+  try {
+    assert.deepEqual((await f.connection.connect(TOOLS)).models, []);
+    await assert.rejects(f.connection.send("Edit", "project"), /available Codex model/);
+    assert.equal(f.requests.some((request) => request.method === "thread/start"), false);
+  } finally { f.connection.disconnect(); }
+});
+test("Codex repeated pagination cursor fails instead of looping", async () => {
+  const f = fixture([{ data: [], nextCursor: "1" }, { data: [], nextCursor: "1" }]);
+  await assert.rejects(f.connection.connect(TOOLS), /repeated model-list page/);
+  assert.equal(f.connection.state.connected, false);
 });

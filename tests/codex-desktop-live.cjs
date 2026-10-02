@@ -31,6 +31,12 @@ app.on("web-contents-created", (_event, contents) => {
         await wait(500);
       }
       if (!connected) throw new Error("Codex did not connect with the existing sign-in.");
+      const modelList = await contents.executeJavaScript('[...document.querySelector("[aria-label=\\"Codex model\\"]").options].map(option=>({id:option.value,name:option.textContent}))');
+      if (modelList.some(({ id }) => /^gpt-5\.(5|6)(-|$)/.test(id))) throw new Error("Removed GPT-5 models are still in the picker.");
+      console.log("CUTLINE_CODEX_MODEL_PICKER", JSON.stringify(modelList));
+      if (process.env.CUTLINE_TEST_MODEL) {
+        await contents.executeJavaScript(`(() => { const select=document.querySelector('[aria-label="Codex model"]'); select.value=${JSON.stringify(process.env.CUTLINE_TEST_MODEL)}; if (!select.value) throw new Error('Requested model missing'); select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+      }
       await contents.executeJavaScript(`void window.cutlineDesktop.onCodexEvent(event => console.log('CODEX_TEST_EVENT', JSON.stringify({type:event.type,name:event.name,status:event.status,busy:event.busy,message:event.message})))`);
       contents.on("console-message", (event) => { if (event.message?.startsWith("CODEX_TEST_EVENT")) console.log(event.message); });
       if (process.env.CUTLINE_LIVE_CODEX !== "1") { console.log("CUTLINE_CODEX_CONNECTED"); app.exit(0); return; }
