@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { CropDialog } from "./CropDialog";
+import { FULL_CROP, normalizeCrop } from "./crop";
 import {
   SlidersHorizontal,
   RotateCcw,
@@ -18,6 +20,7 @@ import {
   Save,
   Trash2,
   RefreshCw,
+  Crop,
 } from "lucide-react";
 import {
   ANIMATIONS,
@@ -75,6 +78,7 @@ export function Inspector({
 }: Props) {
   const isDesktop = typeof window !== "undefined" && Boolean(window.cutlineDesktop);
   const [tab, setTab] = useState("Basic");
+  const [cropping, setCropping] = useState<string | null>(null);
   const [animationPhase, setAnimationPhase] = useState<"Entrance" | "Exit" | "Combo">(
     "Entrance",
   );
@@ -979,6 +983,11 @@ export function Inspector({
                         suffix="%"
                         onChange={(v) => updateTransform({ scale: v / 100 })}
                       />
+                      <Toggle
+                        label="Snap to center guides"
+                        value={clip.snapToGuides !== false}
+                        onChange={(v) => updateClip({ snapToGuides: v })}
+                      />
                       <div className="field-grid">
                         <NumberField
                           label="X (%)"
@@ -1054,6 +1063,11 @@ export function Inspector({
                           keyframe at the playhead. Motion eases between them.
                         </p>
                       )}
+                    </Section>
+                    <Section title="Crop">
+                      <button type="button" className="button" onClick={() => setCropping(clip.id)}><Crop size={15} /> Crop media</button>
+                      <button type="button" className="button" onClick={() => updateClip({ crop: { ...FULL_CROP } }, "crop-reset")}><RotateCcw size={14} /> Reset crop</button>
+                      <p className="field-note">{Math.round(normalizeCrop(clip.crop).width * 100)}% × {Math.round(normalizeCrop(clip.crop).height * 100)}% of the source · non-destructive</p>
                     </Section>
                     <Section title="Incoming transition">
                       <Field label="Style">
@@ -1245,6 +1259,7 @@ export function Inspector({
           </div>
         </>
       )}
+      {clip && cropping === clip.id && project.assets.find((asset) => asset.id === clip.assetId) && <CropDialog key={clip.id} clip={clip} asset={project.assets.find((asset) => asset.id === clip.assetId)!} time={time} cancel={() => setCropping(null)} apply={(crop) => { updateClip({ crop, fit: "contain", fitExplicit: true }, "crop"); setCropping(null); }} />}
     </aside>
   );
 }

@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import {
   clamp,
+  animatedItem,
   clock,
   dimensions,
   interpolatedTransform,
@@ -32,6 +33,7 @@ import {
 import { Renderer, hitBounds, type Bounds } from "./renderer";
 import { MediaPool } from "./media";
 import { historyReducer } from "./useProject";
+import { applyPreviewTransform, snapCanvasCenter } from "./previewAlignment";
 type Props = {
   project: Project;
   selection: Selection;
@@ -299,41 +301,40 @@ export function Preview({
     const rect = canvas.current.getBoundingClientRect(),
       dx = (e.clientX - d.x) / rect.width,
       dy = (e.clientY - d.y) / rect.height;
+    const item = d.kind === "text" ? d.project.texts.find((t) => t.id === d.id) : d.project.clips.find((c) => c.id === d.id);
+    if (!item || !rect.width || !rect.height) return;
+    const transform = "keyframes" in item ? interpolatedTransform(item, time - item.start) : animatedItem(item, time);
+    const isText = d.kind === "text", target = isText ? 0.5 : 0;
+    const position = snapCanvasCenter(
+      clamp(transform.x + dx, isText ? -0.5 : -2, isText ? 1.5 : 2),
+      clamp(transform.y + dy, isText ? -0.5 : -2, isText ? 1.5 : 2),
+      d.bound.x / canvas.current.width - (isText ? 0 : 0.5) - transform.x,
+      d.bound.y / canvas.current.height - (isText ? 0 : 0.5) - transform.y,
+      target, rect.width, rect.height, d.mode === "move" && item.snapToGuides !== false && !e.altKey,
+    );
+    setSnapGuides({ x: position.snapX, y: position.snapY });
     dispatch({
       type: "preview",
       fn: (p) => {
         if (d.kind === "text") {
           const original = d.project.texts.find((t) => t.id === d.id)!;
-          const snapping = d.mode === "move" && original.snapToGuides !== false;
-          const offsetX = d.bound.x / canvas.current!.width - original.x;
-          const offsetY = d.bound.y / canvas.current!.height - original.y;
-          let x = clamp(original.x + dx, -0.5, 1.5);
-          let y = clamp(original.y + dy, -0.5, 1.5);
-          const snapX = snapping && Math.abs((x + offsetX - 0.5) * rect.width) <= 12;
-          const snapY = snapping && Math.abs((y + offsetY - 0.5) * rect.height) <= 12;
-          if (snapX) x = 0.5 - offsetX;
-          if (snapY) y = 0.5 - offsetY;
-          setSnapGuides({ x: snapX, y: snapY });
           return {
             ...p,
             texts: p.texts.map((t) =>
               t.id !== d.id
                 ? t
-                : {
-                    ...t,
-                    ...(d.mode === "move"
+                : applyPreviewTransform(original, d.mode === "move"
                       ? {
-                          x: clamp(x, -0.5, 1.5),
-                          y: clamp(y, -0.5, 1.5),
+                          x: position.x,
+                          y: position.y,
                         }
                       : {
                           fontSize: clamp(
-                            original.fontSize * (1 + dx * 3 + dy * 2),
+                            animatedItem(original, time).fontSize * (1 + dx * 3 + dy * 2),
                             12,
                             400,
                           ),
-                        }),
-                  },
+                        }, time, p.fps),
             ),
           };
         }
@@ -345,8 +346,8 @@ export function Preview({
         const patch =
           d.mode === "move"
             ? {
-                x: clamp(transform.x + dx, -2, 2),
-                y: clamp(transform.y + dy, -2, 2),
+                x: position.x,
+                y: position.y,
               }
             : {
                 scale: clamp(transform.scale * (1 + dx * 2 + dy * 2), 0.05, 5),
@@ -356,23 +357,7 @@ export function Preview({
           clips: p.clips.map((c) =>
             c.id !== d.id
               ? c
-              : original.keyframes.length
-                ? {
-                    ...c,
-                    keyframes: [
-                      ...original.keyframes.filter(
-                        (k) =>
-                          Math.abs(k.time - (time - original.start)) >
-                          1 / p.fps,
-                      ),
-                      {
-                        ...transform,
-                        ...patch,
-                        time: Math.max(0, time - original.start),
-                      },
-                    ].sort((a, b) => a.time - b.time),
-                  }
-                : { ...c, ...patch },
+              : applyPreviewTransform(original, patch, time, p.fps),
           ),
         };
       },
@@ -389,6 +374,7 @@ export function Preview({
     const cancel = (e: KeyboardEvent) => {
       if (e.key === "Escape" && drag.current) {
         drag.current = null;
+        setSnapGuides({ x: false, y: false });
         dispatch({ type: "cancel" });
       }
     };

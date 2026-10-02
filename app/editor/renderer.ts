@@ -14,6 +14,7 @@ import {
 } from "./model";
 import { FILTERS } from "./presets";
 import { letterPopProgress, textMotion } from "./textAnimation";
+import { normalizeCrop } from "./crop";
 
 export type MediaSources = Map<string, HTMLVideoElement | HTMLImageElement>;
 export type Bounds = {
@@ -138,6 +139,8 @@ export class Renderer {
       const motion = this.clipMotion(hitClip, time, !!join);
       const asset = project.assets.find((a) => a.id === hitClip.assetId);
       const size = sourceSize(sources.get(hitClip.id), asset);
+      const crop = normalizeCrop(hitClip.crop);
+      size.width *= crop.width; size.height *= crop.height;
       const fittedScale = size.width && size.height ? Math.min(w / size.width, h / size.height) : 0;
       const contentWidth = hitClip.fit === "contain" && fittedScale ? size.width * fittedScale : w;
       const contentHeight = hitClip.fit === "contain" && fittedScale ? size.height * fittedScale : h;
@@ -286,7 +289,9 @@ export class Renderer {
     if (asset.kind === "demo")
       drawDemo(ctx, asset, w, h, (time - c.start) / clipDuration(c));
     else if (source) {
-      const { width: sw, height: sh } = sourceSize(source, asset);
+      const { width: originalWidth, height: originalHeight } = sourceSize(source, asset);
+      const crop = normalizeCrop(c.crop);
+      const sw = originalWidth * crop.width, sh = originalHeight * crop.height;
       if (sw && sh) {
         const s =
           c.fit === "cover"
@@ -294,6 +299,7 @@ export class Renderer {
             : Math.min(w / sw, h / sh);
         ctx.drawImage(
           source,
+          originalWidth * crop.x, originalHeight * crop.y, sw, sh,
           (w - sw * s) / 2,
           (h - sh * s) / 2,
           sw * s,

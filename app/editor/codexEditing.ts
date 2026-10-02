@@ -1,3 +1,4 @@
+import { normalizeCrop } from "./crop";
 import {
   clipDuration, COMBO_ANIMATIONS, endOf, freezeFrame, makeClip, makeText, normalizeGradientStops,
   projectDuration, roundFrame, setJoinTransition, setPropertyKeyframe, splitItem, transitionSource,
@@ -26,6 +27,7 @@ const id = string("Exact item ID from get_project, or @ref for an item created e
 const animationNames = ANIMATIONS.filter((name) => name !== "None");
 const sharedFields: Record<string, Schema> = {
   label: string(), start: seconds, track,
+  snapToGuides: boolean,
   rotation: number(-3600, 3600, "Degrees."),
   opacity: number(0, 1), animationDuration: seconds, exitAnimationDuration: seconds,
 };
@@ -52,6 +54,7 @@ const clipFields: Record<string, Schema> = {
   scale: number(0.01, 10), speed: number(0.1, 8), volume: number(0, 3),
   fadeIn: seconds, fadeOut: seconds, flipX: boolean, flipY: boolean,
   fit: choices(["cover", "contain"]), brightness: number(0, 200), contrast: number(0, 200),
+  crop: object({ x: number(0, 0.99), y: number(0, 0.99), width: number(0.01, 1), height: number(0.01, 1) }, ["x", "y", "width", "height"]),
   saturation: number(0, 200), temperature: number(-100, 100),
   filter: choices(FILTERS.map((value) => value.name)),
 };
@@ -174,6 +177,7 @@ export function applyCodexEdits(project: Project, input: unknown) {
     next.layerCount = Math.max(next.layerCount, item.track + 1);
   };
   const checkClip = (clip: Clip) => {
+    clip.crop = normalizeCrop(clip.crop);
     const asset = next.assets.find((value) => value.id === clip.assetId)!;
     if (clip.sourceEnd <= clip.sourceStart || (clip.sourceEnd - clip.sourceStart) / clip.speed < 1 / next.fps - 1e-8) throw new Error("A clip must contain at least one frame.");
     if (clip.frozenAt === undefined && asset.kind !== "image" && asset.kind !== "demo" && clip.sourceEnd > asset.duration + 1 / next.fps) throw new Error("The clip trim extends beyond its source media.");

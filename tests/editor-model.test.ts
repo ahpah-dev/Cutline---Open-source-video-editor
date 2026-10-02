@@ -32,6 +32,8 @@ import {
   type Project,
 } from "../app/editor/model";
 import { historyReducer } from "../app/editor/useProject";
+import { applyPreviewTransform, snapCanvasCenter } from "../app/editor/previewAlignment";
+import { cropToAspect, dragCrop, FULL_CROP, normalizeCrop } from "../app/editor/crop";
 import { ANIMATIONS, TEXT_PRESETS } from "../app/editor/presets";
 import { comboMotion, letterPopProgress, textAnimationTiming, textMotion } from "../app/editor/textAnimation";
 import { createCustomAnimationPreset, parseCustomAnimationPresets } from "../app/editor/customAnimationPresets";
@@ -140,7 +142,11 @@ test("all text styles insert New Text and retain their distinct styling", () => 
     new Set(TEXT_PRESETS.map((p) => JSON.stringify(p.style))).size >= 12,
   );
 });
-test("text alignment snapping defaults on and survives project migration", () => {
+test("media and text alignment snapping default on and preserve an opt-out across migration", () => {
+  assert.equal(makeClip(video).snapToGuides, true);
+  const media = makeClip(video); delete media.snapToGuides;
+  assert.equal(migrateProject({ ...newProject(), assets: [video], clips: [media] }, [video]).clips[0].snapToGuides, true);
+  assert.equal(migrateProject({ ...newProject(), assets: [video], clips: [{ ...media, snapToGuides: false }] }, [video]).clips[0].snapToGuides, false);
   assert.equal(makeText().snapToGuides, true);
   const legacy = makeText();
   delete legacy.snapToGuides;
@@ -154,6 +160,57 @@ test("text alignment snapping defaults on and survives project migration", () =>
     [video],
   );
   assert.equal(disabled.texts[0].snapToGuides, false);
+});
+test("source crops normalize safely, migrate, split and undo without changing originals", () => {
+  assert.deepEqual(normalizeCrop(undefined), FULL_CROP);
+  assert.deepEqual(normalizeCrop({ x: NaN, y: Infinity, width: -2, height: 4 }), { x: 0, y: 0, width: 0.01, height: 1 });
+  const crop = normalizeCrop({ x: 0.9, y: 0.8, width: 0.9, height: 0.7 });
+  assert.ok(crop.x + crop.width <= 1 && crop.y + crop.height <= 1);
+  const clip = { ...makeClip(video), crop: { x: 0.25, y: 0, width: 0.5, height: 1 } };
+  const project = { ...newProject(), assets: [video], clips: [clip] };
+  assert.deepEqual(migrateProject(project, [video]).clips[0].crop, clip.crop);
+  const split = splitItem(project, { kind: "clip", id: clip.id }, 1);
+  assert.deepEqual(split.project.clips[1].crop, clip.crop);
+  const initial = { project, past: [], future: [], origin: null, group: "", at: 0 };
+  const edited = historyReducer(initial, { type: "edit", group: "crop", at: 1, fn: (p) => ({ ...p, clips: [{ ...clip, crop: { ...FULL_CROP } }] }) });
+  assert.deepEqual(historyReducer(edited, { type: "undo" }).project.clips[0].crop, clip.crop);
+  assert.deepEqual(makeClip(video).crop, FULL_CROP);
+});
+test("crop presets and corner/move drags stay inside source and preserve locked ratios", () => {
+  const square = cropToAspect(FULL_CROP, 1, 2);
+  assert.deepEqual(square, { x: 0.25, y: 0, width: 0.5, height: 1 });
+  const moved = dragCrop(square, "move", 2, 2);
+  assert.equal(moved.x, 0.5); assert.equal(moved.y, 0);
+  for (const mode of ["nw", "ne", "sw", "se"] as const) {
+    for (const delta of [-3, -0.2, 0.2, 3]) {
+      const resized = dragCrop({ x: 0.2, y: 0.2, width: 0.4, height: 0.4 }, mode, delta, -delta, 0.5);
+      assert.ok(resized.x >= -1e-9 && resized.y >= -1e-9 && resized.x + resized.width <= 1.00000001 && resized.y + resized.height <= 1.00000001);
+      assert.ok(Math.abs(resized.width / resized.height - 0.5) < 1e-9);
+    }
+  }
+});
+test("preview center snapping uses visible centers, independent axes and CSS pixels", () => {
+  assert.deepEqual(snapCanvasCenter(0.01, 0.02, 0, 0, 0, 1000, 500, true), { x: 0, y: 0, snapX: true, snapY: true });
+  assert.deepEqual(snapCanvasCenter(0.02, 0.01, 0, 0, 0, 1000, 500, true), { x: 0.02, y: 0, snapX: false, snapY: true });
+  assert.equal(snapCanvasCenter(0.02, 0, 0, 0, 0, 500, 500, true).x, 0);
+  assert.equal(snapCanvasCenter(0.01, 0.02, 0, 0, 0, 1000, 500, false).x, 0.01);
+  // Left-aligned / rotated text is centered by its rendered bounds, not its anchor.
+  const text = snapCanvasCenter(0.405, 0.46, 0.1, 0.05, 0.5, 1000, 500, true);
+  assert.equal(text.x, 0.4); assert.equal(text.y, 0.45);
+});
+test("preview dragging updates active property and legacy motion keyframes", () => {
+  let clip = makeClip(video);
+  clip = setPropertyKeyframe(clip, "x", 0, 0.2, 30);
+  clip = setPropertyKeyframe(clip, "x", 2, 0.4, 30);
+  const changed = applyPreviewTransform(clip, { x: 0, y: 0 }, 1, 30);
+  assert.equal(interpolatedTransform(changed, 1).x, 0);
+  assert.equal(changed.propertyKeyframes!.x.length, 3);
+  assert.equal(clip.propertyKeyframes!.x.length, 2);
+  const legacy = { ...makeClip(video), keyframes: [{ time: 0, x: 0.2, y: 0.3, scale: 1, rotation: 20, opacity: 1 }] };
+  assert.equal(interpolatedTransform(applyPreviewTransform(legacy, { x: 0 }, 1, 30), 1).x, 0);
+  let text = setPropertyKeyframe(makeText(), "x", 0, 0.2, 30);
+  text = applyPreviewTransform(text, { x: 0.5 }, 0, 30);
+  assert.equal(animatedItem(text, 0).x, 0.5);
 });
 test("Combo animations loop through clips and stay editable across project backups", () => {
   const text = makeText(0, {

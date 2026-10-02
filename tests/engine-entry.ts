@@ -31,10 +31,13 @@ import {
 } from "../app/editorStorage";
 import { persistable } from "../app/editor/useProject";
 import { sampleProject, SAMPLE_ASSETS } from "./fixtures";
-import { createElement, useState } from "react";
+import { createElement, useReducer, useState } from "react";
 import { createRoot } from "react-dom/client";
 import Editor from "../app/Editor";
 import { Inspector } from "../app/editor/Inspector";
+import { Preview } from "../app/editor/Preview";
+import { historyReducer } from "../app/editor/useProject";
+import { FULL_CROP } from "../app/editor/crop";
 import { decodeClipAudio } from "../app/editor/whisper";
 import { waveformColumns, waveformFromBuffer } from "../app/editor/waveform";
 import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "../app/editor/codexTypes";
@@ -948,6 +951,138 @@ export async function runEngineTests() {
     } finally {
       root.unmount(); host.remove();
     }
+  });
+  await check("Source cropping removes real pixels, updates hit bounds and matches export rendering", async () => {
+    const source = testCanvas(); source.width = 200; source.height = 100;
+    const context = source.getContext("2d")!; context.fillStyle = "#ff0000"; context.fillRect(0, 0, 100, 100); context.fillStyle = "#0000ff"; context.fillRect(100, 0, 100, 100);
+    const image = new Image(); image.src = source.toDataURL(); await image.decode();
+    const asset: Asset = { id: "crop-pattern", name: "Crop.png", kind: "image", duration: 5, url: image.src, width: 200, height: 100, sizeLabel: "test", theme: "image" };
+    const project = newProject(); project.assets = [asset];
+    const clip = { ...makeClip(asset), crop: { x: 0.5, y: 0, width: 0.5, height: 1 } };
+    project.clips = [clip];
+    const canvas = testCanvas(); canvas.width = 320; canvas.height = 180;
+    const renderer = new Renderer(), sources = new Map([[clip.id, image]]);
+    renderer.draw(canvas, project, 1, sources);
+    const pixel = canvas.getContext("2d")!.getImageData(160, 90, 1, 1).data;
+    assert(pixel[2] > 240 && pixel[0] < 10, "Discarded red pixels are still in cropped output");
+    assert(Math.abs(renderer.bounds[0].width - 180) < 0.001 && Math.abs(renderer.bounds[0].height - 180) < 0.001, "Cropped square hit bounds are incorrect");
+    const before = hash(canvas);
+    const exported = testCanvas(); exported.width = 320; exported.height = 180;
+    new Renderer().draw(exported, project, 1, sources);
+    assert(hash(exported) === before, "Crop preview/export differ");
+    renderer.draw(canvas, { ...project, clips: [{ ...clip, crop: { ...FULL_CROP } }] }, 1, sources);
+    assert(hash(canvas) !== before, "Reset crop did not restore the full source");
+  });
+  await check("Crop dialog applies presets and exact values, cancels drafts and resets source crops", async () => {
+    const image = testCanvas(); image.width = 200; image.height = 100;
+    const asset: Asset = { id: "crop-ui", name: "Crop.png", kind: "image", duration: 5, url: image.toDataURL(), width: 200, height: 100, sizeLabel: "test", theme: "image" };
+    const fixture = newProject(); fixture.assets = [asset]; fixture.clips = [makeClip(asset)];
+    const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host);
+    let observed = fixture;
+    function Harness() { const [project, setProject] = useState(fixture); observed = project;
+      return createElement(Inspector, { project, selection: { kind: "clip", id: fixture.clips[0].id }, time: 1, clear: () => {}, edit: (fn) => setProject(fn) }); }
+    const button = (text: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((el) => el.textContent?.trim() === text)!;
+    const open = async () => { button("Crop media").click(); for (let i = 0; i < 40 && (!button("Apply crop") || button("Apply crop").disabled); i++) await wait(20); assert(button("Apply crop") && !button("Apply crop").disabled, "Source did not load in crop dialog"); };
+    try {
+      root.render(createElement(Harness)); await wait(80); await open();
+      button("1:1").click(); await wait(20);
+      assert(observed.clips[0].crop?.width === 1, "Draft changed project before Apply");
+      button("Apply crop").click(); await wait(40);
+      assert(observed.clips[0].crop?.width === 0.5 && observed.clips[0].crop?.x === 0.25 && observed.clips[0].fit === "contain", "Square crop was not committed correctly");
+      await open();
+      const stage = host.querySelector<HTMLDivElement>(".crop-source-stage")!;
+      stage.setPointerCapture = () => {};
+      const rect = stage.getBoundingClientRect();
+      const box = host.querySelector<HTMLDivElement>(".source-crop-box")!;
+      box.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 1, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }));
+      stage.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientX: rect.left + rect.width * 0.6, clientY: rect.top + rect.height / 2 }));
+      stage.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1 })); await wait(20);
+      assert(Math.abs(Number(host.querySelector<HTMLInputElement>('[aria-label="Crop x (%)"]')!.value) - 35) < 0.1, "Dragging did not reposition source crop");
+      host.querySelector<HTMLButtonElement>(".crop-handle.nw")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 2, clientX: 100, clientY: 100 }));
+      stage.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 2, clientX: 100 + rect.width * 0.1, clientY: 100 + rect.height * 0.1 }));
+      stage.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 2 })); await wait(20);
+      assert(Math.abs(Number(host.querySelector<HTMLInputElement>('[aria-label="Crop width (%)"]')!.value) - 40) < 0.1, "Corner drag did not resize source crop");
+      const input = host.querySelector<HTMLInputElement>('[aria-label="Crop width (%)"]')!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "30"); input.dispatchEvent(new Event("input", { bubbles: true })); await wait(20);
+      button("Cancel").click(); await wait(30);
+      assert(observed.clips[0].crop?.width === 0.5, "Cancel committed draft crop");
+      await open();
+      const exact = host.querySelector<HTMLInputElement>('[aria-label="Crop width (%)"]')!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(exact, "30"); exact.dispatchEvent(new Event("input", { bubbles: true })); await wait(20);
+      button("Apply crop").click(); await wait(30);
+      assert(observed.clips[0].crop?.width === 0.3, "Exact numeric crop was not committed");
+      await open(); button("Reset").click(); await wait(20); button("Apply crop").click(); await wait(30);
+      assert(observed.clips[0].crop?.width === 1 && observed.clips[0].crop?.x === 0, "Crop reset did not restore source");
+      await open(); button("9:16").click(); await wait(20); button("16:9").click(); await wait(20);
+      assert(Number(host.querySelector<HTMLInputElement>('[aria-label="Crop width (%)"]')!.value) > 80, "Switching crop presets repeatedly shrank the selection");
+      button("Cancel").click();
+    } finally { root.unmount(); host.remove(); }
+  });
+  await check("Preview center magnets snap media/text, toggle off, bypass with Alt and undo cleanly", async () => {
+    const image = testCanvas(); image.width = 200; image.height = 100;
+    image.getContext("2d")!.fillRect(0, 0, 200, 100);
+    const asset: Asset = { id: "snap-image", name: "Snap.png", kind: "image", url: image.toDataURL(), duration: 5, width: 200, height: 100, sizeLabel: "test", theme: "image" };
+    const fixture = newProject(); fixture.assets = [asset];
+    fixture.clips = [{ ...makeClip(asset), x: 0.21, y: 0.15, scale: 0.3, rotation: 30 }];
+    const host = document.createElement("div"); document.body.appendChild(host);
+    const root = createRoot(host);
+    let observed = fixture;
+    let action: (value: Parameters<typeof historyReducer>[1]) => void = () => {};
+    let selectItem: (value: { kind: "clip" | "text"; id: string }) => void = () => {};
+    function Harness() {
+      const [history, dispatch] = useReducer(historyReducer, { project: fixture, past: [], future: [], origin: null, group: "", at: 0 });
+      const [selection, select] = useState<{ kind: "clip" | "text"; id: string } | null>({ kind: "clip", id: fixture.clips[0].id });
+      observed = history.project; action = dispatch; selectItem = select;
+      return createElement("div", {},
+        createElement(Preview, { project: history.project, selection, select, time: 1, setTime: () => {}, seek: () => {}, playing: false, setPlaying: () => {}, dispatch, onError: (message) => { throw new Error(message); } }),
+        createElement(Inspector, { project: history.project, selection, time: 1, clear: () => {}, edit: (fn) => dispatch({ type: "edit", fn, group: "", at: Date.now() }) }));
+    }
+    try {
+      root.render(createElement(Harness));
+      for (let i = 0; i < 80 && !host.querySelector(".selection-box"); i++) await wait(20);
+      const canvas = host.querySelector<HTMLCanvasElement>(".preview-panel canvas")!;
+      assert(canvas && host.querySelector(".selection-box"), "Preview did not render media selection");
+      canvas.style.width = "800px"; canvas.style.height = "450px";
+      // Synthetic pointer events exercise the real handlers; there is no native
+      // active pointer for capture in this hidden test window.
+      canvas.setPointerCapture = () => {};
+      const send = (type: string, x: number, y: number, altKey = false) => canvas.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 71, button: 0, buttons: type === "pointerup" ? 0 : 1, clientX: x, clientY: y, altKey }));
+      const drag = async (targetX: number, targetY: number, altKey = false) => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        const rect = canvas.getBoundingClientRect();
+        const box = host.querySelector<HTMLElement>(".selection-box")!;
+        const startX = rect.left + parseFloat(box.style.left) / 100 * rect.width;
+        const startY = rect.top + parseFloat(box.style.top) / 100 * rect.height;
+        send("pointerdown", startX, startY); await wait(20);
+        send("pointermove", rect.left + targetX * rect.width, rect.top + targetY * rect.height, altKey); await wait(80);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      };
+      const finish = () => send("pointerup", 0, 0);
+      const toggle = [...host.querySelectorAll<HTMLLabelElement>(".toggle-field")].find((label) => label.textContent?.includes("Snap to center guides"))!.querySelector<HTMLInputElement>("input")!;
+      assert(toggle.checked, "Media snapping is not on by default");
+      await drag(0.506, 0.508);
+      assert(Math.abs(observed.clips[0].x) < 1e-9 && Math.abs(observed.clips[0].y) < 1e-9, "Media did not snap exactly to center");
+      assert(host.querySelector(".alignment-snap-guides i") && host.querySelector(".alignment-snap-guides b"), "Center guides are missing");
+      finish(); await wait(30);
+      assert(!host.querySelector(".alignment-snap-guides"), "Guides remained after releasing drag");
+      action({ type: "undo" }); await wait(60);
+      assert(observed.clips[0].x === 0.21, "Drag did not undo in one step");
+      toggle.click(); await wait(30);
+      await drag(0.506, 0.508);
+      assert(Math.abs(observed.clips[0].x - 0.006) < 1e-6, "Disabled snapping still moved media to center");
+      assert(!host.querySelector(".alignment-snap-guides"), "Disabled snapping showed guides");
+      finish(); await wait(30); toggle.click(); await wait(30);
+      await drag(0.509, 0.508, true);
+      assert(Math.abs(observed.clips[0].x - 0.009) < 1e-6, `Alt did not bypass center snapping: x=${observed.clips[0].x}, enabled=${observed.clips[0].snapToGuides}, guides=${Boolean(host.querySelector('.alignment-snap-guides'))}`);
+      send("pointercancel", 0, 0); await wait(60);
+      assert(Math.abs(observed.clips[0].x - 0.006) < 1e-6, "Cancelled drag did not restore original position");
+      const text = makeText(0, { text: "Left aligned", align: "left", x: 0.2, y: 0.3, rotation: 35 });
+      action({ type: "load", project: { ...fixture, clips: [], texts: [text] } }); selectItem({ kind: "text", id: text.id }); await wait(80);
+      await drag(0.506, 0.508);
+      const bounds = host.querySelector<HTMLElement>(".selection-box")!;
+      assert(Math.abs(parseFloat(bounds.style.left) - 50) < 0.001 && Math.abs(parseFloat(bounds.style.top) - 50) < 0.001, "Rotated left-aligned text bounds did not snap to center");
+      finish();
+    } finally { root.unmount(); host.remove(); }
   });
   await check("Animation inspector saves a tuned text exit and reapplies it to video", async () => {
     localStorage.removeItem("cutline:custom-animation-presets:v1");

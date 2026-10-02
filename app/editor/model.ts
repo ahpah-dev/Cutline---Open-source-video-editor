@@ -1,3 +1,4 @@
+import { FULL_CROP, normalizeCrop, type SourceCrop } from "./crop";
 export type MediaKind = "video" | "image" | "audio" | "demo";
 export type Ratio = "16:9" | "9:16" | "1:1" | "4:5";
 export type EffectName =
@@ -173,6 +174,8 @@ export type Clip = {
   rotation: number;
   opacity: number;
   animation?: AnimationName;
+  /** Magnetically align the visible media center while dragging in the player. */
+  snapToGuides?: boolean;
   comboAnimations?: ComboAnimation[];
   animationDuration?: number;
   animationSettings?: TextAnimationOptions;
@@ -188,6 +191,8 @@ export type Clip = {
   fit: "cover" | "contain";
   /** Distinguishes a chosen crop from the old default for imported stills. */
   fitExplicit?: boolean;
+  /** Non-destructive normalized source rectangle, before fit/transform/effects. */
+  crop?: SourceCrop;
   filter: string;
   brightness: number;
   contrast: number;
@@ -406,6 +411,7 @@ export function makeClip(asset: Asset, start = 0, track = 0): Clip {
     scale: 1,
     rotation: 0,
     opacity: 1,
+    snapToGuides: true,
     animation: "None",
     comboAnimations: [],
     animationDuration: 0.5,
@@ -414,6 +420,7 @@ export function makeClip(asset: Asset, start = 0, track = 0): Clip {
     flipX: false,
     flipY: false,
     fit: asset.kind === "image" ? "contain" : "cover",
+    crop: { ...FULL_CROP },
     filter: "Original",
     brightness: 100,
     contrast: 100,
@@ -857,6 +864,7 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
     c.comboAnimations = normalizeComboAnimations(c.comboAnimations);
     c.keyframes = Array.isArray(c.keyframes) ? c.keyframes : [];
     c.propertyKeyframes = c.propertyKeyframes && typeof c.propertyKeyframes === "object" ? c.propertyKeyframes : {};
+    c.crop = normalizeCrop(c.crop);
     if (asset.kind === "image" && c.fit === "cover" && !c.fitExplicit && !c.propertyKeyframes.fit?.length) c.fit = "contain";
     c.animation = typeof c.animation === "string" ? c.animation : "None";
     c.exitAnimation = typeof c.exitAnimation === "string" ? c.exitAnimation : "None";
