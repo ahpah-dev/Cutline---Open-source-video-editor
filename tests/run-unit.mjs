@@ -10,6 +10,7 @@ await build({
       entry: {
         model: "tests/editor-model.test.ts",
         timeline: "tests/timeline-component.test.tsx",
+        codex: "tests/codex-editing.test.ts",
       },
       formats: ["es"],
       fileName: (_format, name) => name + ".js",
@@ -24,7 +25,7 @@ await build({
 });
 const result = spawnSync(
   process.execPath,
-  ["--test", "work/unit-tests/model.js", "work/unit-tests/timeline.js"],
+  ["--test", "work/unit-tests/model.js", "work/unit-tests/timeline.js", "work/unit-tests/codex.js"],
   { stdio: "inherit", env: { ...process.env, NODE_ENV: "test" } },
 );
 process.exitCode = result.status ?? 1;

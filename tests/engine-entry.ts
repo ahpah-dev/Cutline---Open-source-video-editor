@@ -37,6 +37,7 @@ import Editor from "../app/Editor";
 import { Inspector } from "../app/editor/Inspector";
 import { decodeClipAudio } from "../app/editor/whisper";
 import { waveformColumns, waveformFromBuffer } from "../app/editor/waveform";
+import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "../app/editor/codexTypes";
 
 const assert = (condition: unknown, message: string) => {
   if (!condition) throw new Error(message);
@@ -1058,7 +1059,7 @@ export async function runEngineTests() {
     const root = createRoot(host);
     try {
       root.render(createElement(Editor));
-      for (let i = 0; i < 50 && !host.querySelector<HTMLInputElement>('input[type="file"][accept^="video/"]'); i++) await wait(20);
+      for (let i = 0; i < 80 && !host.querySelector('[aria-label="Play"]:not([disabled])'); i++) await wait(20);
       const input = host.querySelector<HTMLInputElement>('input[type="file"][accept^="video/"]');
       assert(input, "Media import input is missing");
       const transfer = new DataTransfer();
@@ -1143,6 +1144,73 @@ export async function runEngineTests() {
       root.unmount();
       host.remove();
     }
+  });
+  await check("Codex edits the live Editor atomically, previews frames, rejects stale/cancelled tools and undoes/redoes", async () => {
+    const fixture = newProject();
+    await saveProject(persistable(fixture));
+    let onEvent: ((event: CodexEvent) => void) | undefined;
+    let onTool: ((request: CodexToolRequest) => Promise<CodexToolResult>) | undefined;
+    const state: CodexStatus = { connected: false, needsLogin: false, busy: false, models: [{ id: "test", name: "Test", isDefault: true }] };
+    let toolActive = true;
+    window.cutlineDesktop = {
+      isDesktop: true, platform: "win32", version: async () => "0.4.0",
+      isMaximized: async () => false, isFullscreen: async () => false,
+      onMaximizedChange: () => () => {}, onFullscreenChange: () => () => {},
+      minimize: () => {}, maximize: () => {}, close: () => {}, toggleFullscreen: () => {},
+      listInstalledFonts: async () => ["Test Installed Font"], saveFile: async () => ({ canceled: true }),
+      confirmNewProject: async () => true, onBeforeClose: () => () => {},
+      codexStatus: async () => state,
+      codexConnect: async () => { state.connected = true; onEvent?.({ type: "status", ...state }); return state; },
+      codexLogin: async () => {}, codexSend: async () => ({ threadId: "test" }), codexStop: async () => {}, codexReset: async () => {}, codexDisconnect: async () => {},
+      codexToolActive: async () => toolActive,
+      onCodexEvent: (callback) => { onEvent = callback; return () => { onEvent = undefined; }; },
+      onCodexTool: (callback) => { onTool = callback; return () => { onTool = undefined; }; },
+    };
+    const host = document.createElement("div"); document.body.appendChild(host);
+    const root = createRoot(host);
+    const call = (name: string, args: unknown) => onTool!({ id: "test-call", projectId: fixture.id, name: "cutline_" + name, args });
+    const snapshot = async () => {
+      const item = (await call("get_project", {})).contentItems[0];
+      return JSON.parse(item.type === "inputText" ? item.text : "{}");
+    };
+    try {
+      root.render(createElement(Editor));
+      for (let i = 0; i < 80 && (!onTool || !host.querySelector('[aria-label="Play"]:not([disabled])')); i++) await wait(20);
+      assert(onTool, "Editor did not subscribe to Codex tools");
+      host.querySelector<HTMLButtonElement>(".codex-toggle")!.click(); await wait(30);
+      assert(host.querySelector('[aria-label="Codex video assistant"]'), "Codex panel missing");
+      host.querySelector<HTMLButtonElement>(".codex-connect")!.click(); await wait(30);
+      assert(host.querySelector('[aria-label="Describe your video edit"]'), "Chat did not open after connect");
+      const catalog = await call("get_catalog", {});
+      assert(JSON.stringify(catalog).includes("Test Installed Font"), "Installed fonts not available to AI");
+      const before = await snapshot();
+      const request = { projectId: fixture.id, expectedRevision: before.revision, operations: [
+        { op: "add_text", ref: "title", text: "Codex live edit", start: 0, duration: 4, track: 2, patch: { fontSize: 100, color: "#f08020" } },
+        { op: "animation", id: "@title", phase: "Entrance", duration: 0.5, layers: [{ name: "Letter Pop In" }] },
+        { op: "effect", id: "@title", name: "Wavy", amount: 20, waves: 6 },
+      ] };
+      const applied = await call("apply_edits", request);
+      assert(applied.success, "Edit failed");
+      const after = await snapshot();
+      assert(after.texts.length === 1 && after.texts[0].text === "Codex live edit", "Live timeline did not update");
+      assert(after.texts[0].effects[0].waves === 6 && after.texts[0].animationStack[0].name === "Letter Pop In", "Batch did not apply effects/animation");
+      let staleRejected = false;
+      try { await call("apply_edits", request); } catch { staleRejected = true; }
+      assert(staleRejected, "Stale edit overwrote project");
+      const preview = await call("preview", { time: 1 });
+      await wait(30);
+      assert(preview.contentItems.some((item) => item.type === "inputImage" && item.imageUrl.startsWith("data:image/jpeg")), "AI did not receive rendered preview");
+      assert(Number(host.querySelector('[aria-label="Playhead"]')?.getAttribute("aria-valuenow")) === 1, "Preview did not seek live player");
+      await call("history", { action: "undo" });
+      assert((await snapshot()).texts.length === 0, "Batch was not undone in one step");
+      await call("history", { action: "redo" });
+      assert((await snapshot()).texts.length === 1, "Batch could not be redone");
+      await wait(250);
+      assert(((await loadProject()).project?.texts as { text: string }[])?.[0]?.text === "Codex live edit", "AI edits were not autosaved");
+      toolActive = false;
+      let cancelled = false; try { await call("history", { action: "undo" }); } catch { cancelled = true; }
+      assert(cancelled && (await loadProject()).project?.texts.length === 1, "Cancelled request modified timeline");
+    } finally { root.unmount(); host.remove(); delete window.cutlineDesktop; }
   });
   return { passed, failures, details };
 }

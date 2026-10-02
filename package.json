@@ -1,6 +1,6 @@
 {
   "name": "cutline-video-editor",
-  "version": "0.3.25",
+  "version": "0.4.0",
   "description": "A private, watermark-free local video editor for Windows.",
   "author": "Cutline",
   "main": "electron/main.cjs",
@@ -16,7 +16,7 @@
     "desktop:run": "npm run desktop:build && electron electron/main.cjs",
     "desktop:dist": "npm run desktop:build && electron-builder --win nsis portable --x64 && node scripts/prune-releases.mjs",
     "test": "npm run test:unit && npm run test:engine && npm run build && node --test tests/rendered-html.test.mjs",
-    "test:unit": "node tests/run-unit.mjs && node --test tests/installed-fonts.test.cjs",
+    "test:unit": "node tests/run-unit.mjs && node --test tests/installed-fonts.test.cjs tests/codex-connection.test.cjs",
     "test:engine": "node tests/run-engine.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern public/whisper-runtime",

@@ -42,6 +42,8 @@ import {
 import { Timeline } from "./editor/Timeline";
 import { Preview } from "./editor/Preview";
 import { Inspector, Field } from "./editor/Inspector";
+import { CodexPanel } from "./editor/CodexPanel";
+import { useCodex } from "./editor/useCodex";
 import { EFFECTS, FILTERS, TEXT_PRESETS, TRANSITIONS } from "./editor/presets";
 import {
   clamp,
@@ -138,6 +140,7 @@ export default function Editor() {
   const subtitleRun = useRef(0);
   const subtitleReject = useRef<((error: Error) => void) | null>(null);
   const [desktop, setDesktop] = useState(false),
+    [codexOpen, setCodexOpen] = useState(false),
     [maximized, setMaximized] = useState(false),
     [fullscreen, setFullscreen] = useState(false),
     [timelineHeight, setTimelineHeight] = useState(260);
@@ -631,6 +634,7 @@ export default function Editor() {
       abort.current = null;
     }
   }
+  const codex = useCodex({ project, ready, blocked: !!busy || !!exporting || !!subtitleProgress || dialog === "projects", time, selected, canUndo, canRedo, edit, dispatch, seek, select, openExport });
   return (
     <main
       className={"editor-app" + (desktop ? " desktop-app" : "")}
@@ -722,6 +726,10 @@ export default function Editor() {
           </span>
         </div>
         <div className="header-actions">
+          <button className={"button secondary codex-toggle" + (codexOpen ? " active" : "")} aria-pressed={codexOpen} onClick={() => setCodexOpen((value) => !value)} title="Edit your video with Codex">
+            <Sparkles size={15} /> Codex
+            {codex.status.connected && <i className="codex-status-dot" />}
+          </button>
           <span className="local-badge">
             <HardDrive size={13} />
             Local & free
@@ -781,7 +789,7 @@ export default function Editor() {
           </div>
         )}
       </header>
-      <div className="editing-workspace">
+      <div className={"editing-workspace" + (codexOpen ? " codex-open" : "")}>
         <nav className="library-nav" aria-label="Editing tools">
           {NAV.map(({ name, icon: Icon }) => (
             <button
@@ -1224,7 +1232,7 @@ export default function Editor() {
           dispatch={dispatch}
           onError={notify}
         />
-        <Inspector
+        {codexOpen ? <CodexPanel codex={codex} desktop={desktop} ready={ready && !busy} canUndo={canUndo} undo={() => dispatch({ type: "undo" })} close={() => setCodexOpen(false)} /> : <Inspector
           focusEffects={library === "Effects"}
           project={project}
           selection={selection}
@@ -1236,7 +1244,7 @@ export default function Editor() {
             setTime(phase === "Entrance" ? item.start : Math.max(item.start, endOf(item) - timing.exitDuration));
             setPlaying(true);
           }}
-        />
+        />}
       </div>
       <div
         className="workspace-resizer"

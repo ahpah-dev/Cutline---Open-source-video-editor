@@ -389,6 +389,55 @@ summary::-webkit-details-marker {
   min-width: 0;
   min-height: 0;
 }
+.editing-workspace.codex-open {
+  grid-template-columns: 68px minmax(200px, 16vw) minmax(0, 1fr) minmax(320px, 25vw);
+}
+.codex-toggle.active { border-color: #78d8b7; color: #94e9c9; background: #20332e; }
+.codex-status-dot, .codex-connected i { width: 6px; height: 6px; border-radius: 50%; background: #8deac7; display: inline-block; }
+.codex-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #16191e; border-left: 1px solid var(--line); overflow: hidden; font-size: 12px; }
+.codex-panel-header { padding: 15px 16px; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.codex-mark { width: 31px; height: 31px; display: grid; place-items: center; background: #263931; border: 1px solid #3b594c; border-radius: 9px; color: #9aebca; }
+.codex-panel-header > div { flex: 1; }
+.codex-panel-header strong { display: block; font-size: 13px; }
+.codex-panel-header > div > span { display: block; color: #8d9aab; font-size: 10px; margin-top: 3px; }
+.codex-panel .icon-button { background: transparent; color: #92a0af; border: 0; padding: 6px; border-radius: 6px; display: grid; place-items: center; }
+.codex-panel .icon-button:hover { background: #282e36; color: #e3e9f2; }
+.codex-setup { padding: 30px 22px 20px; overflow: auto; }
+.codex-orb { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 17px; background: linear-gradient(145deg, #304e41, #1e2927); color: #a4f4d1; border: 1px solid #3b584b; margin-bottom: 23px; }
+.codex-panel h3 { font-size: 19px; letter-spacing: -0.5px; font-weight: 650; margin: 0 0 12px; }
+.codex-setup p, .codex-welcome p { color: #a6b1bf; font-size: 12px; line-height: 1.75; margin: 0; }
+.codex-setup ol { padding: 0; margin: 24px 0; list-style: none; display: flex; flex-direction: column; gap: 13px; color: #c6d1de; }
+.codex-setup li { display: flex; align-items: center; gap: 8px; }
+.codex-setup li svg { color: #92e8c4; }
+.codex-connect { justify-content: center; width: 100%; min-height: 40px; }
+.codex-setup small { color: #8190a1; display: block; font-size: 10px; line-height: 1.8; margin-top: 16px; }
+.codex-session { display: flex; align-items: center; padding: 8px 15px; gap: 5px; border-bottom: 1px solid #242a32; }
+.codex-connected { flex: 1; color: #9cabb9; font-size: 10px; display: flex; align-items: center; gap: 6px; }
+.codex-messages { overflow: auto; flex: 1; min-height: 0; padding: 22px 16px 10px; }
+.codex-welcome { padding: 5px 4px 20px; }
+.codex-welcome h3 { font-size: 17px; }
+.codex-examples { display: flex; flex-direction: column; gap: 8px; margin-top: 22px; }
+.codex-examples button { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid #343c47; background: #20262e; border-radius: 8px; color: #c8d2df; text-align: left; font-size: 11px; padding: 11px 12px; }
+.codex-examples button:hover { border-color: #668e7d; background: #25332e; }
+.codex-message { margin-bottom: 20px; overflow-wrap: anywhere; }
+.codex-message > span { font-size: 10px; color: #9ab6a9; font-weight: 650; }
+.codex-message p { white-space: pre-wrap; line-height: 1.75; font-size: 12px; color: #d4dce6; margin: 7px 0 0; }
+.codex-message.user { background: #252d35; border: 1px solid #343e49; border-radius: 10px; padding: 11px 13px; }
+.codex-message.user > span { color: #9aabba; }
+.codex-working { display: flex; gap: 8px; align-items: center; color: #9bbbac; padding: 12px 16px; font-size: 11px; }
+.codex-composer { margin: 8px 12px 12px; border: 1px solid #3b4853; border-radius: 10px; background: #1d232b; flex-shrink: 0; }
+.codex-composer:focus-within { border-color: #79b39d; }
+.codex-composer textarea { display: block; width: 100%; min-height: 82px; max-height: 170px; resize: vertical; padding: 13px; border: 0; background: transparent; color: #e2e8f0; font-size: 12px; line-height: 1.6; outline: none; }
+.codex-composer textarea::placeholder { color: #8190a1; }
+.codex-composer-tools { display: flex; align-items: center; justify-content: space-between; padding: 0 10px 9px; gap: 8px; }
+.codex-composer select { max-width: 220px; min-width: 0; background: #252d36; color: #aebdcb; border: 1px solid #39434f; border-radius: 6px; font-size: 10px; padding: 5px 7px; }
+.codex-send { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; border: 0; background: #91e6c3; color: #12271d; flex-shrink: 0; }
+.codex-send:disabled { opacity: .35; }
+.codex-composer-footer { border-top: 1px solid #313a45; padding: 8px 10px; font-size: 8px; color: #8a98a9; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.codex-composer-footer button { background: transparent; border: 0; color: #b7c9bc; display: flex; align-items: center; gap: 4px; font-size: 10px; padding: 0; }
+.codex-panel button:disabled { cursor: default; opacity: .45; }
+.codex-error { padding: 12px 15px; background: #392829; color: #ffc7bc; border-top: 1px solid #72403b; font-size: 11px; line-height: 1.6; overflow: auto; max-height: 145px; flex-shrink: 0; }
+.codex-error button { display: block; margin-top: 8px; color: #ffdcd4; background: #543a38; border: 1px solid #96625a; border-radius: 5px; padding: 4px 9px; font-size: 10px; }
 .library-nav {
   background: #15181d;
   border-right: 1px solid var(--line);

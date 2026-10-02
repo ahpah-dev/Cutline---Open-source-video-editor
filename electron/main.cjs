@@ -11,6 +11,31 @@ const { writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { listInstalledFonts } = require("./fonts.cjs");
+const { CodexConnection } = require("./codex.cjs");
+const { randomUUID } = require("node:crypto");
+let codex = null;
+const codexTools = new Map();
+function cancelCodexTools() {
+  for (const pending of codexTools.values()) { clearTimeout(pending.timer); pending.reject(new Error("Editing cancelled.")); }
+  codexTools.clear();
+}
+function getCodex() {
+  if (!codex) codex = new CodexConnection({
+    userData: app.getPath("userData"), version: app.getVersion(),
+    emit: (event) => {
+      if (event.type === "status" && !event.connected) cancelCodexTools();
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("codex:event", event);
+    },
+    runTool: (name, args) => new Promise((resolve, reject) => {
+      if (!mainWindow || mainWindow.isDestroyed()) { reject(new Error("The editor is closed.")); return; }
+      const id = randomUUID();
+      const timer = setTimeout(() => { codexTools.delete(id); reject(new Error("The editor did not respond. Retry the edit.")); }, 60000);
+      codexTools.set(id, { resolve, reject, timer });
+      mainWindow.webContents.send("codex:tool-request", { id, name, args, projectId: codex.projectId });
+    }),
+  });
+  return codex;
+}
 
 const APP_ID = "com.cutline.editor";
 let mainWindow = null;
@@ -212,6 +237,29 @@ ipcMain.handle("fonts:list", (event, refresh = false) => {
   return listInstalledFonts(refresh === true);
 });
 
+ipcMain.handle("codex:connect", (event, tools) => { requireTrustedSender(event); return getCodex().connect(tools); });
+ipcMain.handle("codex:status", (event) => { requireTrustedSender(event); return getCodex().state; });
+ipcMain.handle("codex:send", (event, payload) => { requireTrustedSender(event); return getCodex().send(payload?.prompt, payload?.projectId, payload?.model); });
+ipcMain.handle("codex:reset", (event) => { requireTrustedSender(event); cancelCodexTools(); getCodex().reset(); });
+ipcMain.handle("codex:disconnect", (event) => { requireTrustedSender(event); cancelCodexTools(); getCodex().disconnect(); });
+ipcMain.handle("codex:stop", (event) => { requireTrustedSender(event); cancelCodexTools(); return getCodex().stop(); });
+ipcMain.handle("codex:tool-active", (event, id) => { requireTrustedSender(event); return codexTools.has(id); });
+ipcMain.on("codex:tool-response", (event, payload) => {
+  if (!isTrustedSender(event)) return;
+  const pending = codexTools.get(payload?.id);
+  if (!pending) return;
+  clearTimeout(pending.timer); codexTools.delete(payload.id);
+  const result = payload.result;
+  if (typeof result?.success !== "boolean" || !Array.isArray(result.contentItems) || JSON.stringify(result).length > 10000000) pending.reject(new Error("Invalid editing result."));
+  else pending.resolve(result);
+});
+ipcMain.handle("codex:login", async (event) => {
+  requireTrustedSender(event);
+  const url = new URL(await getCodex().login());
+  if (url.protocol !== "https:" || !["auth.openai.com", "auth0.openai.com", "chatgpt.com"].includes(url.hostname)) throw new Error("Unexpected sign-in address.");
+  await shell.openExternal(url.href);
+});
+
 ipcMain.handle("project:confirm-new", async (event) => {
   requireTrustedSender(event);
   const window = BrowserWindow.fromWebContents(event.sender);
@@ -274,3 +322,4 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+app.on("before-quit", () => { cancelCodexTools(); codex?.disconnect(); });

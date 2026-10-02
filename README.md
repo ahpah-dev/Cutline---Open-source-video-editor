@@ -1,6 +1,23 @@
-# Cutline 0.3.25
+# Cutline 0.4.0
 
-A free, device-local video editor for Windows and the web. No subscription, account in the PC app, or export watermark. The hosted development site uses its existing private Sites access policy. Source media is never uploaded by the editor.
+A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files stay local; the optional assistant receives project metadata and preview frames it requests.
+
+## Edit your video with Codex (Windows)
+
+1. Open Cutline and import your media as usual.
+2. Click **Codex** in the top bar, then **Connect Codex**. Cutline finds an existing supported Codex desktop/CLI installation and reuses its sign-in. If none is found, it downloads and verifies the official Windows x64 runtime automatically (about 325 MB installed, separate from the editor).
+3. If prompted, click **Sign in to Codex** and finish the normal browser sign-in. No API key, npm, terminal commands or configuration files are needed.
+4. Describe your edit in the panel. For example: “Make a 15-second vertical edit using the imported clips. Add a centered gradient title with Letter Pop In, a slow zoom, and smooth dissolves between the cuts.” Select clips manually when you want to target them. Enter sends; Shift+Enter adds a new line.
+
+Codex works directly on the open timeline. Its editing tools expose exact item IDs, frame-aligned seconds, imported assets, installed fonts, preset names, text styling/gradients, clip transforms/color/audio, animation stacks, Combo loops, effects, genuine two-sided transitions, splits, freeze frames, duplication/deletion, layer mute/hide, and property keyframes. It can inspect rendered preview frames and open the regular export settings. Import and final save location remain under your control.
+
+Each validated batch commits together and undoes in one step. A project/revision check refuses stale edits after manual changes; pending tool calls are cancelled on Stop or Disconnect, and requests for a different open project are rejected. You can keep editing manually, close the panel to return to the inspector, switch models from the account's available list, or start a new chat. Chats are session-only, while timeline edits are autosaved normally. AI can make mistakes: review the result and use Undo or make a backup before a large edit.
+
+![Codex connection panel](docs/screenshots/codex-setup.png)
+
+![A real Codex edit in the Cutline interface](docs/screenshots/codex-edit.png)
+
+The connection uses the official [Codex app-server protocol](https://developers.openai.com/codex/app-server) over a local stdio subprocess, not an editor API key or a remote control port. This ephemeral video-editing session disables shell/environment access, web search and unrelated MCP/app integrations without changing your Codex configuration. Original imported media is not uploaded automatically; project text/settings/metadata and requested rendered preview frames are sent through Codex. This feature is optional and needs internet, an eligible Codex account, and available account usage; Cutline itself remains free. If your existing Codex CLI sign-in uses an API key instead of ChatGPT, its normal API usage charges apply; the composer displays a notice. The browser editor cannot launch this local connection.
 
 ## Editing
 
@@ -43,10 +60,10 @@ npm run desktop:dist
 
 `desktop:dist` emits the Windows x64 installer and portable executable into `outputs/desktop`. Electron uses an isolated, sandboxed preload bridge; Node.js is not exposed to the UI.
 
-`test:unit` runs model/history tests and isolated React timeline interaction tests. `test:engine` tests actual Canvas rendering, IndexedDB preservation, all available encoders, audio, cancellation and duplicate source playback in an isolated Electron profile. `npm test` also builds and checks the server-rendered shell. Tests never use the user's normal project profile.
+`test:unit` runs model/history, isolated React timeline, atomic Codex editing, and mocked app-server protocol tests. `test:engine` tests actual Canvas rendering, IndexedDB preservation, all available encoders, audio, cancellation, duplicate source playback, and the live Editor's Codex tool bridge in an isolated Electron profile. `npm test` also builds and checks the server-rendered shell. Tests never use the user's normal project profile. An optional production integration test, `CUTLINE_LIVE_CODEX=1 electron tests/codex-desktop-live.cjs`, uses the installed Codex sign-in and account usage for one synthetic edit, preview and undo; do not run it as a routine offline test.
 
 ## Verification for this release
 
-35 model/component checks and the rendering/export suite passed, including animated Wavy distortion isolated to its clip with matching preview/export frames and verified wave-count changes; Combo loop editing, timing, project persistence, and matching text/video preview and export frames for all ten loops; text center snapping and legacy-project defaults; high-resolution RMS/peak waveform analysis; source-time zoom and trim mapping; automatic upgrades of older audio projects; audio import visibility; text gradients; image fit; editable two-sided transitions; and embedded-audio crossfade. The rendering suite exercised every effect, look, transition and text preset, verified playable 720p MP4 and WebM outputs with audio, and decoded audio from a real exported MP4 for Whisper. A production browser test downloaded Whisper Tiny, transcribed a spoken WAV, and inserted four editable captions. Type checking passed. The Windows package and server-rendered shell are checked during release packaging.
+The model/component/protocol and rendering/export suites cover atomic AI batches, exact IDs, stale revisions, invalid operations, preview frames, undo/redo and persistence, plus the existing animation/effect/transition/audio/export features. A real production Windows run reused Codex sign-in, edited an isolated timeline with a requested title, checked a rendered preview, and undid the edit. The automatic official runtime download was checksum-verified and its extracted executable started successfully; only the needed executable is retained. Type checking and the server-rendered shell are checked during release packaging.
 
 An isolated Windows production run completed Whisper transcription with CDN requests deliberately blocked and a fresh model download. Isolated Electron screenshots and pointer selection were checked with synthetic media. Timeline component tests simulate pointer events and verify exact clip state/position; they are not a substitute for broad human/device testing. 4K/60 fps and long-project performance are not certified.

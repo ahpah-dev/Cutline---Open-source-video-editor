@@ -4,6 +4,29 @@ contextBridge.exposeInMainWorld("cutlineDesktop", {
   isDesktop: true,
   platform: process.platform,
   version: () => ipcRenderer.invoke("app:version"),
+  codexConnect: (tools) => ipcRenderer.invoke("codex:connect", tools),
+  codexStatus: () => ipcRenderer.invoke("codex:status"),
+  codexLogin: () => ipcRenderer.invoke("codex:login"),
+  codexSend: (prompt, projectId, model) => ipcRenderer.invoke("codex:send", { prompt, projectId, model }),
+  codexStop: () => ipcRenderer.invoke("codex:stop"),
+  codexReset: () => ipcRenderer.invoke("codex:reset"),
+  codexDisconnect: () => ipcRenderer.invoke("codex:disconnect"),
+  codexToolActive: (id) => ipcRenderer.invoke("codex:tool-active", id),
+  onCodexEvent: (callback) => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on("codex:event", listener);
+    return () => ipcRenderer.removeListener("codex:event", listener);
+  },
+  onCodexTool: (callback) => {
+    const listener = async (_event, request) => {
+      let result;
+      try { result = await callback(request); }
+      catch (error) { result = { success: false, contentItems: [{ type: "inputText", text: String(error.message || error) }] }; }
+      ipcRenderer.send("codex:tool-response", { id: request.id, result });
+    };
+    ipcRenderer.on("codex:tool-request", listener);
+    return () => ipcRenderer.removeListener("codex:tool-request", listener);
+  },
   listInstalledFonts: (refresh = false) =>
     ipcRenderer.invoke("fonts:list", Boolean(refresh)),
   minimize: () => ipcRenderer.send("window:minimize"),
