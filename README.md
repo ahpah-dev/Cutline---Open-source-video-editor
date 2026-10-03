@@ -1,10 +1,14 @@
-# Cutline 0.4.3
+# Cutline 0.4.4
 
 A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files stay local; the optional assistant receives project metadata and preview frames it requests.
 
 ## Crop video and images
 
 New in 0.4.3: select a video or image clip, then open **Basic → Crop → Crop media**. Move the selection or resize its corners, choose an aspect ratio (including vertical and square), or enter exact source percentages. **Apply crop** commits one undoable edit; Cancel leaves the project unchanged. Reset restores the full source. Cropping is non-destructive, survives project backups and splitting, and uses the same source rectangle in preview and export. Applying a crop switches to Fit inside so the selected region stays visible; Fill frame remains available under Transform.
+
+## Mark beats and moments
+
+New in 0.4.4: **Mark beat** and **Mark moment** buttons sit beside Snap and Ripple delete on the timeline toolbar. Each click places a marker at the current playhead, aligned to a project frame; clicking the same button again at that time removes it. Markers appear on their own ruler lane. Click a marker to seek there, or right-click it to remove it. They save in project files and backups without changing clip positions, playback, or export duration. When Codex reads the project, it receives each marker's type and time in seconds and uses them as editing timing guides.
 
 ## Edit your video with Codex (Windows)
 

@@ -1835,6 +1835,47 @@ summary::-webkit-details-marker {
   height: 25px;
   pointer-events: none;
 }
+.ruler-markers {
+  position: sticky;
+  top: 32px;
+  z-index: 5;
+  height: 20px;
+  border-bottom: 1px solid #303a46;
+  background: #151c23;
+}
+.timeline-marker {
+  position: absolute;
+  inset-block: 0;
+  width: 18px;
+  padding: 0;
+  transform: translateX(-50%);
+  background: transparent;
+}
+.timeline-marker::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ffc65c;
+}
+.timeline-marker i {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+  background: #ffc65c;
+  border: 1px solid #fff1c8;
+  border-radius: 2px;
+}
+.timeline-marker.moment::before, .timeline-marker.moment i { background: #74d2ff; }
+.timeline-marker.moment i { border-color: #e0f7ff; }
+.track-markers { position: sticky; top: 32px; z-index: 8; height: 20px; border-bottom: 1px solid #303a46; background: #151c23; }
+.timeline-toolbar .timeline-marker-toolbar { color: #ffd477; }
+.timeline-toolbar .timeline-marker-toolbar.moment { color: #88d7ff; }
 .ruler > span:before {
   content: "";
   position: absolute;

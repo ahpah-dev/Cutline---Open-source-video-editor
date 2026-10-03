@@ -257,6 +257,7 @@ export type TextClip = {
   fadeOut: number;
   propertyKeyframes?: PropertyKeyframes;
 };
+export type TimelineMarker = { id: string; kind: "beat" | "moment"; time: number };
 export type Project = {
   version: 3;
   layerCount: number;
@@ -268,6 +269,8 @@ export type Project = {
   assets: Asset[];
   clips: Clip[];
   texts: TextClip[];
+  /** Playhead guides for beats and important moments; never affect playback/export timing. */
+  markers: TimelineMarker[];
   mutedTracks: string[];
   hiddenTracks: string[];
 };
@@ -494,8 +497,19 @@ export function newProject(): Project {
     assets: [],
     clips: [],
     texts: [],
+    markers: [],
     mutedTracks: [],
     hiddenTracks: [],
+  };
+}
+export function toggleTimelineMarker(project: Project, time: number, kind: TimelineMarker["kind"]): Project {
+  const frameTime = roundFrame(Math.max(0, time), project.fps);
+  const existing = project.markers.find((marker) => marker.kind === kind && Math.abs(marker.time - frameTime) < 0.5 / project.fps);
+  return {
+    ...project,
+    markers: existing
+      ? project.markers.filter((marker) => marker.id !== existing.id)
+      : [...project.markers, { id: uid("marker"), kind, time: frameTime }].sort((a, b) => a.time - b.time),
   };
 }
 export function splitItem(
@@ -957,5 +971,9 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
     layerCount: count,
     mutedTracks,
     hiddenTracks,
+    markers: (Array.isArray(r.markers) ? r.markers : []).flatMap((marker: Record<string, unknown>) => {
+      if (!marker || typeof marker !== "object" || (marker.kind !== "beat" && marker.kind !== "moment") || typeof marker.time !== "number" || !Number.isFinite(marker.time)) return [];
+      return [{ id: typeof marker.id === "string" && marker.id ? marker.id : uid("marker"), kind: marker.kind, time: roundFrame(Math.max(0, marker.time), Number(r.fps) === 60 ? 60 : 30) } as TimelineMarker];
+    }).sort((a, b) => a.time - b.time),
   };
 }

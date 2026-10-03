@@ -32,6 +32,8 @@ import {
   ArrowDown,
   Snowflake,
   ClipboardPaste,
+  Flag,
+  Bookmark,
 } from "lucide-react";
 import {
   clamp,
@@ -48,11 +50,13 @@ import {
   trimItem,
   transitionSource,
   transitionWindow,
+  toggleTimelineMarker,
   type Clip,
   type Project,
   type Selection,
   type TextClip,
   type TransitionName,
+  type TimelineMarker,
 } from "./model";
 import { TRANSITIONS } from "./presets";
 import { historyReducer } from "./useProject";
@@ -142,11 +146,15 @@ export function Timeline({
     } | null>(null),
     updateDrag = useRef<() => void>(() => {});
   const duration = projectDuration(project);
+  const playheadFrame = roundFrame(time, project.fps);
+  const hasBeatMarker = project.markers.some((marker) => marker.kind === "beat" && marker.time === playheadFrame);
+  const hasMomentMarker = project.markers.some((marker) => marker.kind === "moment" && marker.time === playheadFrame);
   // Editing space is independent of media/export duration. Keep a screenful
   // ahead of navigation, and never collapse it when clips are trimmed/deleted.
   const padding = Math.max(30, viewport.width / pps);
   const timelineEnd = Math.max(workspaceEnd, Math.ceil(Math.max(
     60, duration + padding, time + padding,
+    ...project.markers.map((marker) => marker.time + padding),
     (viewport.left + viewport.width * 2) / pps,
   ) / 30) * 30);
   const width = timelineEnd * pps;
@@ -608,6 +616,26 @@ export function Timeline({
           >
             <span>Ripple delete</span>
           </button>
+          <button
+            className={hasBeatMarker ? "active timeline-marker-toolbar" : ""}
+            aria-label="Mark beat"
+            aria-pressed={hasBeatMarker}
+            title="Mark or remove a beat at the playhead"
+            onClick={() => edit((p) => toggleTimelineMarker(p, time, "beat"))}
+          >
+            <Flag size={15} />
+            <span>Mark beat</span>
+          </button>
+          <button
+            className={hasMomentMarker ? "active timeline-marker-toolbar moment" : ""}
+            aria-label="Mark moment"
+            aria-pressed={hasMomentMarker}
+            title="Mark or remove an important moment at the playhead"
+            onClick={() => edit((p) => toggleTimelineMarker(p, time, "moment"))}
+          >
+            <Bookmark size={15} />
+            <span>Mark moment</span>
+          </button>
         </div>
         <div className="tool-group zoom-tools">
           <span className="small-muted">Timeline</span>
@@ -673,6 +701,7 @@ export function Timeline({
               </div>
             </details>
           </div>
+          <div className="track-markers" aria-hidden="true" />
           {lanes.map((l) => {
             const key = "layer:" + l.track,
               hidden = project.hiddenTracks.includes(key),
@@ -765,6 +794,27 @@ export function Timeline({
                   </span>
                 ),
               )}
+            </div>
+            <div className="ruler-markers" role="group" aria-label="Beat and moment markers">
+              {project.markers.map((marker: TimelineMarker, index: number) => (
+                <button
+                  key={marker.id}
+                  type="button"
+                  className={`timeline-marker ${marker.kind}`}
+                  style={{ left: marker.time * pps }}
+                  aria-label={`Go to ${marker.kind === "beat" ? "beat" : "important moment"} ${index + 1} at ${clock(marker.time, true, project.fps)}; right-click to remove`}
+                  title={`${marker.kind === "beat" ? "Beat" : "Moment"} · ${clock(marker.time, true, project.fps)} · click to seek, right-click to remove`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={() => seek(marker.time)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    edit((p) => ({ ...p, markers: p.markers.filter((item) => item.id !== marker.id) }));
+                  }}
+                >
+                  <i aria-hidden="true" />
+                </button>
+              ))}
             </div>
             {lanes.map((l) => {
               const key = "layer:" + l.track;
