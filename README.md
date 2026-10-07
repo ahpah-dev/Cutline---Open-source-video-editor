@@ -1,6 +1,22 @@
-# Cutline 0.7.0
+# Cutline 0.8.0
 
 A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files stay local; the optional assistant receives project metadata and preview frames it requests.
+
+## Automatic beat detection and workspace themes
+
+New in 0.8.0: **Auto beats** beside Mark beat opens local audio analysis. Choose an audio/video clip, then **Detect beats**. Spectral-flux onset analysis, autocorrelation tempo estimation and tempo-constrained beat tracking run in a cancellable worker—no AI subscription, model download or media upload. The selected source trim and playback speed are respected. Analysis covers the first 10 minutes of the selected edit.
+
+Preview the waveform/markers before applying them. Choose tempo-aware **Rhythm beats** or transient-based **Strong hits**, adjust sensitivity, use a BPM override, choose every/other/fourth/half-beat density, and offset timing in milliseconds. Half-beats are interpolated subdivisions, not separately detected transients. A confidence indicator encourages reviewing uncertain results. Rhythm interpretation varies by music; half/double-time ambiguities and sparse/non-percussive recordings can need manual correction.
+
+Adding markers is one undoable operation, aligned to project frames. Manual beats/moments and other clips' auto guides are preserved. By default, reanalysis replaces only that source clip's auto guides; uncheck the replacement option to merge. Markers can still be clicked, removed, and used for snapping. Project backups and Codex snapshots preserve each auto guide's source clip and estimated BPM. Guides are absolute timeline positions: reanalyze after moving, trimming or changing the source speed. Detection does not automatically cut or animate video.
+
+**Theme** in the topbar changes the entire workspace, including the custom Windows topbar, inspector, panels, menus and timeline. Choose **Graphite**, **Midnight**, **Forest**, or **Light**. The preference persists on this device, independently of projects. Theme changes do not recolor canvas pixels, source footage, color-wheel hues or exported video.
+
+This release also includes the 0.7.1 font fix: selected text fonts are explicitly loaded before preview/export, paused frames redraw after loading, and non-Latin font subsets and font-style keyframes are prepared. The Manrope label now matches the rendered font rather than a cached fallback.
+
+![Automatic beat detection in Cutline](docs/screenshots/auto-beats.png)
+
+![Light workspace theme](docs/screenshots/theme-light.png)
 
 ## Advanced color grading and local object detection
 
@@ -125,6 +141,8 @@ npm run desktop:dist
 `test:unit` runs model/history, isolated React timeline, compositing/coordinate and atomic Codex editing tests, plus mocked app-server protocol tests. `test:engine` tests actual Canvas rendering, mask controls and keyframe drags, blend/transition endpoints, feather boundaries, chroma key, IndexedDB preservation, all available encoders, masked encoded output, stereo audio, cancellation, duplicate source playback, and the live Editor's Codex tool bridge in an isolated Electron profile. `npm test` also builds and checks the server-rendered shell. Tests never use the user's normal project profile. An optional production integration test, `CUTLINE_LIVE_CODEX=1 electron tests/codex-desktop-live.cjs`, uses the installed Codex sign-in and account usage for one synthetic edit, preview and undo; do not run it as a routine offline test.
 
 ## Verification for this release
+
+The 0.8.0 update passes 155 model/component/protocol and rendering/export checks, including spectral timing at 80/120/160 BPM, silence/steady-tone rejection, beat density/offset/sensitivity, frame-aligned guide migration and atomic undo, plus cold text-font loading. Production Windows checks exercise real audio decoding and the shipped beat worker, marker preservation/undo/cancellation, four distinct topbar/panel palettes, persisted theme reload and minimum-window geometry. The same beat/theme workflow and Manrope inspector-to-render check are repeated against the packaged app archive. Results remain music- and device-dependent; these tests are not a guarantee of perfect detection or flawless editing.
 
 The 0.7.0 model/component/protocol and rendering/export suites cover grading math, neutral migration, alpha, GPU/CPU agreement, curves, keyframes, strict AI properties, chroma switch clicks, detector-result validation and source-coordinate mapping. They also retain the expanded effect/transition catalogue, deterministic rendering, exact transition endpoints, transparent text, stack order/reset/removal and automation, alongside masks, blend modes, canvas drags, locks, audio and atomic AI batches. Actual encoded MP4/WebM, a masked export and a graded export are decoded and checked. An isolated production Windows run performs real YOLOS Tiny inference, applies an undoable object mask, verifies a fresh worker with network blocked, and checks grading UI/curve input at 1100×700, 1480×920 and 1920×1080. Type checking, scoped lint, the server-rendered shell and packaged startup are part of verification. Earlier releases' production Windows runs verified Codex sign-in, an isolated timeline edit, rendered preview and undo, plus the checksum-verified official runtime download. Live account-consuming AI inference is not routinely repeated for UI/rendering updates.
 

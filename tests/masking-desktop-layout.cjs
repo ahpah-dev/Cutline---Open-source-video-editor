@@ -7,7 +7,7 @@ const { app, BrowserWindow } = require("electron");
 
 process.env.CUTLINE_LAYOUT_TEST = "1";
 process.env.CUTLINE_TEST_PROFILE ??= path.resolve("work/masking-layout-profile-050");
-require("../electron/main.cjs");
+require(process.env.CUTLINE_TEST_APP_MAIN || "../electron/main.cjs");
 
 function waitFor(condition, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {

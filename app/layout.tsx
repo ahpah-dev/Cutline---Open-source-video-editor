@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./editor/themes.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://cutline-video-editor.vtbyx49kb2.chatgpt.site"),

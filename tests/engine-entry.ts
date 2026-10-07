@@ -46,6 +46,7 @@ import { runMaskUiChecks } from "./mask-ui-engine";
 import { runExpandedEffectsTests } from "./expanded-effects-engine";
 import { runTransitionTests } from "./transitions-engine";
 import { runColorGradingChecks } from "./color-grading-engine";
+import { runTextFontChecks } from "./text-fonts-engine";
 import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "../app/editor/codexTypes";
 
 const assert = (condition: unknown, message: string) => {
@@ -1356,6 +1357,7 @@ export async function runEngineTests() {
   await runVisualCompositingTests(check, assert);
   await runMaskUiChecks(check);
   await runColorGradingChecks(check);
+  await runTextFontChecks(check);
   await runAudioReliabilityChecks(check);
   await runExpandedEffectsTests(check, assert);
   await runTransitionTests(check, assert);

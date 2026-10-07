@@ -316,7 +316,7 @@ export type TextClip = VisualCompositing & {
   fadeOut: number;
   propertyKeyframes?: PropertyKeyframes;
 };
-export type TimelineMarker = { id: string; kind: "beat" | "moment"; time: number };
+export type TimelineMarker = { id: string; kind: "beat" | "moment"; time: number; source?:"auto"; sourceClipId?:string; bpm?:number };
 export type Project = {
   version: 3;
   layerCount: number;
@@ -1052,7 +1052,8 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
     lockedTracks: [...new Set(lockedTracks)].filter((key) => /^layer:\d+$/.test(key) && Number(key.split(":")[1]) < count),
     markers: (Array.isArray(r.markers) ? r.markers : []).flatMap((marker: Record<string, unknown>) => {
       if (!marker || typeof marker !== "object" || (marker.kind !== "beat" && marker.kind !== "moment") || typeof marker.time !== "number" || !Number.isFinite(marker.time)) return [];
-      return [{ id: typeof marker.id === "string" && marker.id ? marker.id : uid("marker"), kind: marker.kind, time: roundFrame(Math.max(0, marker.time), Number(r.fps) === 60 ? 60 : 30) } as TimelineMarker];
+      return [{ id: typeof marker.id === "string" && marker.id ? marker.id : uid("marker"), kind: marker.kind, time: roundFrame(Math.max(0, marker.time), Number(r.fps) === 60 ? 60 : 30),
+        ...(marker.source === "auto" ? {source:"auto",...(typeof marker.sourceClipId === "string"?{sourceClipId:marker.sourceClipId}:{}),...(typeof marker.bpm === "number"&&Number.isFinite(marker.bpm)&&marker.bpm>0?{bpm:marker.bpm}:{})}:{}) } as TimelineMarker];
     }).sort((a, b) => a.time - b.time),
   };
 }

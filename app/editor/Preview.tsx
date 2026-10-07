@@ -250,7 +250,7 @@ export function Preview({
           (p.playing
             ? now - drawnAt >= 1000 / p.project.fps
             : renderedTime !== t);
-        if (shouldDraw) {
+        if (shouldDraw && media.textFontsReady) {
           draw.draw(
             target,
             p.project,

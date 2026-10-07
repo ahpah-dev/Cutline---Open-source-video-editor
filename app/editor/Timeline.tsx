@@ -34,6 +34,7 @@ import {
   ClipboardPaste,
   Flag,
   Bookmark,
+  AudioLines,
   LockKeyhole,
   LockKeyholeOpen,
   AlignStartHorizontal,
@@ -90,6 +91,7 @@ type Props = {
   onOpenTransitions: (incomingId: string) => void;
   ripple: boolean;
   setRipple: (v: boolean) => void;
+  onDetectBeats?:()=>void;
 };
 type Drag = {
   item: Clip | TextClip;
@@ -129,6 +131,7 @@ export function Timeline({
   onOpenTransitions,
   ripple,
   setRipple,
+  onDetectBeats,
 }: Props) {
   const [pps, setPps] = useState(64),
     [snapping, setSnapping] = useState(true),
@@ -658,6 +661,7 @@ export function Timeline({
             <Flag size={15} />
             <span>Mark beat</span>
           </button>
+          {onDetectBeats&&<button aria-label="Auto detect beats" title="Analyze audio and preview automatic beat markers" onClick={onDetectBeats}><AudioLines size={15}/><span>Auto beats</span></button>}
           <button
             className={hasMomentMarker ? "active timeline-marker-toolbar moment" : ""}
             aria-label="Mark moment"
@@ -844,10 +848,10 @@ export function Timeline({
                 <button
                   key={marker.id}
                   type="button"
-                  className={`timeline-marker ${marker.kind}`}
+                  className={`timeline-marker ${marker.kind}${marker.source==="auto"?" auto":""}`}
                   style={{ left: marker.time * pps }}
                   aria-label={`Go to ${marker.kind === "beat" ? "beat" : "important moment"} ${index + 1} at ${clock(marker.time, true, project.fps)}; Delete or right-click to remove`}
-                  title={`${marker.kind === "beat" ? "Beat" : "Moment"} · ${clock(marker.time, true, project.fps)} · click to seek, Delete or right-click to remove`}
+                  title={`${marker.source==="auto"?`Auto beat${marker.bpm?` · ${marker.bpm} BPM`:""}`:marker.kind === "beat" ? "Beat" : "Moment"} · ${clock(marker.time, true, project.fps)} · click to seek, Delete or right-click to remove`}
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={() => seek(marker.time)}
                   onKeyDown={(event) => {

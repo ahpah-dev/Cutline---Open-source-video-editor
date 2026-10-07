@@ -15,6 +15,7 @@ import {
 import { FILTERS } from "./presets";
 import { letterPopProgress, textMotion } from "./textAnimation";
 import { normalizeCrop } from "./crop";
+import { textFont } from "./textFonts";
 import { applyExpandedEffect } from "./expandedEffects";
 import { applyTransition } from "./transitions";
 import { ColorGradeRenderer, hasAdvancedGrade } from "./colorGrading";
@@ -838,14 +839,7 @@ export class Renderer {
     ctx.scale(sx, sy);
     const blur = motion.blur * w;
     if (blur > 0) ctx.filter = `blur(${blur}px)`;
-    ctx.font =
-      (t.italic ? "italic " : "") +
-      t.fontWeight +
-      " " +
-      size +
-      'px "' +
-      t.fontFamily +
-      '"';
+    ctx.font = textFont(t, size);
     ctx.textAlign = t.align;
     ctx.textBaseline = "middle";
     ctx.lineJoin = "round";

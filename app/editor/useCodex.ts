@@ -108,8 +108,7 @@ export function useCodex(options: Options) {
       try {
         await pool.ensure(project);
         await pool.sync(project, time, false);
-        // Canvas text uses the same bundled/system fonts as the editor.
-        await Promise.all(project.texts.map((text) => document.fonts.load(`${text.italic ? "italic " : ""}${text.fontWeight} ${text.fontSize}px "${text.fontFamily.replaceAll('"', "")}"`).catch(() => [])));
+        // MediaPool also prepares text fonts, matching editor preview/export.
         await active();
         if (projectRevision(current.current.project) !== revision) throw new Error("The project changed during preview. Read it again before verifying.");
         const canvas = document.createElement("canvas");

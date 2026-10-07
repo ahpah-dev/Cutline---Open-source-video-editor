@@ -12,6 +12,7 @@ import {
 } from "./model";
 import { Renderer, type MediaSources } from "./renderer";
 import { analyzeAudioWaveform } from "./waveform";
+import { ensureTextFonts } from "./textFonts";
 
 function ready(element: HTMLMediaElement, event: string, timeout = 20000, signal?: AbortSignal) {
   if (signal?.aborted) return Promise.reject(new DOMException("Media loading cancelled", "AbortError"));
@@ -140,6 +141,8 @@ export async function inspectFile(file: File): Promise<Asset> {
 
 export class MediaPool {
   revision = 0;
+  textFontsReady = true;
+  private fontPreparation = 0;
   sources: MediaSources = new Map();
   private elements = new Map<string, HTMLMediaElement>();
   private pending = new Map<string, Promise<void>>();
@@ -154,10 +157,19 @@ export class MediaPool {
   private exporting = false;
   async ensure(project: Project) {
     if (this.disposed) return;
+    // A paused preview otherwise caches the fallback-font frame indefinitely.
+    const fontPreparation = ++this.fontPreparation;
+    this.textFontsReady = false;
+    const fontsReady = ensureTextFonts(project).then(() => {
+      if (!this.disposed && fontPreparation === this.fontPreparation) {
+        this.textFontsReady = true;
+        this.revision++;
+      }
+    });
     const ids = new Set(project.clips.filter((c) => project.assets.find((a) => a.id === c.assetId)?.url).map((c) => c.id));
     for (const id of this.urls.keys()) if (!ids.has(id)) this.remove(id);
     await Promise.all(
-      project.clips.map((c) => {
+      [fontsReady, ...project.clips.map((c) => {
         const asset = project.assets.find((a) => a.id === c.assetId);
         if (!asset?.url) return;
         if (this.urls.get(c.id) === asset.url) return this.pending.get(c.id);
@@ -204,7 +216,7 @@ export class MediaPool {
         });
         this.pending.set(c.id, promise);
         return promise;
-      }),
+      })],
     );
   }
   private connect(id: string, el: HTMLMediaElement) {

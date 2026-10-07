@@ -4,7 +4,9 @@ import { loadMediaAsset } from "../editorStorage";
 export type WhisperChunk = { text: string; timestamp: [number, number | null] };
 
 /** Decode the imported local media and resample exactly the selected edit to Whisper's 16 kHz mono input. */
-export async function decodeClipAudio(clip: Clip, asset: Asset): Promise<Float32Array> {
+export async function decodeClipAudio(clip: Clip, asset: Asset, options:{signal?:AbortSignal;maxDuration?:number} = {}): Promise<Float32Array> {
+  const check=()=>{if(options.signal?.aborted)throw new DOMException("Audio analysis cancelled", "AbortError");};
+  check();
   const savedMedia = await loadMediaAsset(asset.id);
   let source: ArrayBuffer;
   if (savedMedia?.blob) {
@@ -12,17 +14,19 @@ export async function decodeClipAudio(clip: Clip, asset: Asset): Promise<Float32
   } else {
     if (!asset.url) throw new Error("The source file is missing. Relink or re-import this media.");
     try {
-      const response = await fetch(asset.url);
+      const response = await fetch(asset.url,{signal:options.signal});
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       source = await response.arrayBuffer();
     } catch {
-      throw new Error("Could not read this clip's source file. Relink or re-import the media, then try subtitles again.");
+      check();throw new Error("Could not read this clip's source file. Relink or re-import the media, then try again.");
     }
   }
   const context = new AudioContext();
   try {
+    check();
     const decoded = await context.decodeAudioData(source);
-    const duration = Math.min(clipDuration(clip), 60 * 60);
+    check();
+    const duration = Math.min(clipDuration(clip), options.maxDuration ?? 60 * 60);
     const output = new Float32Array(Math.ceil(duration * 16000));
     const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) => decoded.getChannelData(index));
     const sourceStart = clip.sourceStart * decoded.sampleRate;
@@ -37,6 +41,7 @@ export async function decodeClipAudio(clip: Clip, asset: Asset): Promise<Float32
     }
     return output;
   } catch (error) {
+    check();
     throw new Error(`Could not decode audio from this file. Try an MP3 or WAV source, or a standard H.264 MP4. ${(error as Error).message}`);
   } finally {
     void context.close();

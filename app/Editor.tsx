@@ -43,6 +43,9 @@ import {
 } from "lucide-react";
 import { Timeline } from "./editor/Timeline";
 import { Preview } from "./editor/Preview";
+import { BeatDetectionDialog, beatSourceKey } from "./editor/BeatDetectionDialog";
+import { applyBeatMarkers } from "./editor/beatDetection";
+import { ThemePicker } from "./editor/ThemePicker";
 import { Inspector, Field } from "./editor/Inspector";
 import { CodexPanel } from "./editor/CodexPanel";
 import { useCodex } from "./editor/useCodex";
@@ -141,6 +144,7 @@ export default function Editor() {
     ),
     [archives, setArchives] = useState<PersistedProject[]>([]);
   const [subtitleClipId, setSubtitleClipId] = useState("");
+  const [beatsOpen,setBeatsOpen]=useState(false);
   const [subtitleModel, setSubtitleModel] = useState("onnx-community/whisper-large-v3-ONNX");
   const [subtitleProgress, setSubtitleProgress] = useState<{ message: string; percent: number | null } | null>(null);
   const [subtitleError, setSubtitleError] = useState("");
@@ -738,6 +742,7 @@ export default function Editor() {
           </span>
         </div>
         <div className="header-actions">
+          <ThemePicker />
           <button className={"button secondary codex-toggle" + (codexOpen ? " active" : "")} aria-pressed={codexOpen} onClick={() => setCodexOpen((value) => !value)} title="Edit your video with Codex">
             <Sparkles size={15} /> Codex
             {codex.status.connected && <i className="codex-status-dot" />}
@@ -1337,7 +1342,13 @@ export default function Editor() {
         }}
         ripple={ripple}
         setRipple={setRipple}
+        onDetectBeats={()=>{setPlaying(false);setBeatsOpen(true);}}
       />
+      {beatsOpen&&<BeatDetectionDialog key={project.id} project={project} initialClipId={selectedClip?.id} close={()=>setBeatsOpen(false)} seek={seek} apply={(clipId,key,times,bpm,replace)=>{
+        const clip=project.clips.find(c=>c.id===clipId);
+        if(!clip||beatSourceKey(project,clip)!==key){notify("Source timing changed. Reanalyze the audio first.");return;}
+        edit(p=>applyBeatMarkers(p,clipId,times,bpm,replace));setBeatsOpen(false);notify("Beat markers added. Undo removes this batch.");
+      }}/>
       <input
         hidden
         type="file"
