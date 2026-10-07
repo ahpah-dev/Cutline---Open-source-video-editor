@@ -6,8 +6,58 @@ import { createRoot } from "react-dom/client";
 import { Timeline } from "../app/editor/Timeline";
 import { historyReducer } from "../app/editor/useProject";
 import { waveformColumns } from "../app/editor/waveform";
-import { makeClip, newProject, projectDuration, setJoinTransition, type Project, type Selection, type TransitionName } from "../app/editor/model";
+import { makeClip, migrateProject, newProject, projectDuration, setJoinTransition, type Project, type Selection, type TransitionName } from "../app/editor/model";
 import { sampleProject } from "./fixtures";
+import { alignSelectionToPlayhead, detachClipAudio, removeSelection } from "../app/editor/timelineOperations";
+
+test("detached video audio preserves source timing, automation, and one-step undo", () => {
+  const project = newProject();
+  const video = { id: "source", name: "Take.mp4", kind: "video" as const, duration: 30, sizeLabel: "1 MB", theme: "video" };
+  const clip = { ...makeClip(video, 12, 2), sourceStart: 4, sourceEnd: 16, speed: 2, volume: 0.75,
+    propertyKeyframes: { volume: [{ time: 0, value: 0.2, easing: "linear" as const }, { time: 6, value: 0.8, easing: "linear" as const }] } };
+  project.assets = [video];
+  project.clips = [clip];
+  const result = detachClipAudio(project, clip.id);
+  const audio = result.project.clips.at(-1)!;
+  assert.equal(audio.kind, "audio");
+  assert.equal(audio.assetId, video.id);
+  assert.equal(audio.start, 12);
+  assert.deepEqual([audio.sourceStart, audio.sourceEnd, audio.speed], [4, 16, 2]);
+  const restored = migrateProject(result.project, result.project.assets);
+  const restoredAudio = restored.clips.find((item) => item.id === audio.id)!;
+  assert.equal(restoredAudio.kind, "audio", "Detached video audio must remain audio after reopening or backup restoration");
+  assert.deepEqual([restoredAudio.sourceStart, restoredAudio.sourceEnd, restoredAudio.speed], [4, 16, 2]);
+  assert.deepEqual(audio.propertyKeyframes?.volume, clip.propertyKeyframes.volume);
+  assert.equal(result.project.clips[0].volume, 0);
+  assert.equal(result.project.clips[0].propertyKeyframes?.volume, undefined);
+  assert.equal(project.clips[0].volume, 0.75, "Detachment must not mutate the source project");
+  const edited = historyReducer({ project, past: [], future: [], origin: null, group: "", at: 0 },
+    { type: "edit", fn: () => result.project, group: "", at: 1 });
+  assert.equal(historyReducer(edited, { type: "undo" }).project, project);
+  project.lockedTracks = ["layer:2"];
+  assert.equal(detachClipAudio(project, clip.id).project, project);
+});
+
+test("group alignment preserves offsets, and locked layers survive ripple deletion", () => {
+  const project = newProject();
+  const video = { id: "source", name: "Take.mp4", kind: "video" as const, duration: 30, sizeLabel: "1 MB", theme: "video" };
+  project.assets = [video];
+  project.clips = [
+    { ...makeClip(video, 2, 1), id: "a", sourceEnd: 3 },
+    { ...makeClip(video, 4, 1), id: "b", sourceEnd: 3 },
+    { ...makeClip(video, 8, 1), id: "c", sourceEnd: 2 },
+    { ...makeClip(video, 2, 0), id: "locked", sourceEnd: 5 },
+  ];
+  const selected = [{ kind: "clip" as const, id: "a" }, { kind: "clip" as const, id: "b" }];
+  const aligned = alignSelectionToPlayhead(project, selected, 20, "end");
+  assert.deepEqual(aligned.clips.slice(0, 2).map((clip) => clip.start), [15, 17]);
+  assert.equal(alignSelectionToPlayhead(project, selected, 0, "end").clips[1].start, 2, "Moving to zero must keep group spacing");
+  project.lockedTracks = ["layer:0"];
+  const deleted = removeSelection(project, [...selected, { kind: "clip", id: "locked" }], true);
+  assert.equal(deleted.clips.find((clip) => clip.id === "c")!.start, 3, "Overlapping deleted gaps must be counted once");
+  assert.deepEqual(deleted.clips.find((clip) => clip.id === "locked"), project.clips[3]);
+  assert.equal(alignSelectionToPlayhead(project, [{ kind: "clip", id: "locked" }], 15, "start"), project);
+});
 
 test("Timeline component: exact drag, cross-track move, trim, zoom, cancel, and undo", async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', {
@@ -449,6 +499,43 @@ test("Timeline component: exact drag, cross-track move, trim, zoom, cancel, and 
     assert.equal(waveform.querySelectorAll("rect").length, 0, "Waveform must not use stretched boxes");
     assert.ok((waveform.querySelector(".waveform-body")?.getAttribute("d") ?? "").includes("M"), "Waveform lines are missing");
     assert.ok(Math.abs(waveformColumns(audio.waveform, undefined, 4, 8, 8, 10)[0].rms - 0.8) < 0.001, "Trimmed waveform starts at the selected source range");
+    const protectedProject = newProject();
+    protectedProject.assets = [realVideo];
+    protectedProject.clips = [{ ...makeClip(realVideo), sourceEnd: 3 }];
+    await act(async () => load(protectedProject));
+    geometry();
+    await act(async () => button("Lock layer:0").click());
+    assert.deepEqual(observed.lockedTracks, ["layer:0"]);
+    const afterLock = observed;
+    const protectedClip = document.querySelector<HTMLElement>(".timeline-clip")!;
+    const clipRect = protectedClip.getBoundingClientRect();
+    await event(protectedClip, "pointerdown", clipRect.left + 20, clipRect.top + 15);
+    await event(document.querySelector(".timeline")!, "pointermove", clipRect.left + 148, clipRect.top + 15);
+    await tick();
+    await event(document.querySelector(".timeline")!, "pointerup", clipRect.left + 148, clipRect.top + 15);
+    assert.equal(observed, afterLock, "Locked clips can be selected but never dragged");
+    const protectedTrim = protectedClip.querySelector<HTMLElement>('[aria-label="Trim end"]')!;
+    await event(protectedTrim, "pointerdown", clipRect.right, clipRect.top + 15);
+    await event(document.querySelector(".timeline")!, "pointerup", clipRect.right - 64, clipRect.top + 15);
+    assert.equal(observed, afterLock, "Locked trims must not create a changed project or undo item");
+    assert.ok(button("Split at playhead").hasAttribute("disabled"));
+    assert.ok(button("Move to layer above").hasAttribute("disabled"));
+    await act(async () => button("Unlock layer:0").click());
+    const protectedRuler = button("Playhead");
+    await event(protectedRuler, "pointerdown", 145 + 4 * 64, 16);
+    await event(document.querySelector(".timeline")!, "pointerup", 145 + 4 * 64, 16);
+    await act(async () => button("Mark beat").click());
+    assert.equal(observed.markers[0].time, 4);
+    await event(protectedRuler, "pointerdown", 145, 16);
+    await event(document.querySelector(".timeline")!, "pointerup", 145, 16);
+    geometry();
+    await event(protectedClip, "pointerdown", 170, clipRect.top + 15);
+    await event(document.querySelector(".timeline")!, "pointerup", 170 + 3.92 * 64, clipRect.top + 15);
+    assert.equal(observed.clips[0].start, 4, "Clip starts magnetically snap to a beat marker");
+    const marker = document.querySelector<HTMLElement>(".timeline-marker")!;
+    await act(async () => marker.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Delete", bubbles: true })));
+    assert.equal(observed.markers.length, 0, "Focused marker Delete removes that timing cue");
+    assert.equal(observed.clips.length, 1, "Marker deletion must not delete the selected clip");
     await act(async () => load(newProject()));
     geometry();
     const emptyRuler = button("Playhead");

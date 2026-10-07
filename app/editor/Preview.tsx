@@ -18,6 +18,8 @@ import {
   Scan,
   Volume2,
   VolumeX,
+  Shapes,
+  LockKeyhole,
 } from "lucide-react";
 import {
   clamp,
@@ -34,6 +36,8 @@ import { Renderer, hitBounds, type Bounds } from "./renderer";
 import { MediaPool } from "./media";
 import { historyReducer } from "./useProject";
 import { applyPreviewTransform, snapCanvasCenter } from "./previewAlignment";
+import { maskGeometry, maskSvgPath, normalizeCompositing, type MaskFrame, type MaskGeometry } from "./visualCompositing";
+import { applyMaskPatch, maskDragPatch } from "./maskEditing";
 type Props = {
   project: Project;
   selection: Selection;
@@ -67,8 +71,14 @@ export function Preview({
     [loading, setLoading] = useState(false),
     [muted, setMuted] = useState(false),
     [guides, setGuides] = useState(false),
+    [editingMask, setEditingMask] = useState<string | null>(null),
     [immersive, setImmersive] = useState(false);
   const ownsNativeFullscreen = useRef(false);
+  const maskDrag = useRef<{
+    id: string; kind: "clip" | "text"; mode: "move" | "size" | "rotate";
+    x: number; y: number; time: number; project: Project;
+    frame: MaskFrame; geometry: MaskGeometry; startAngle: number;
+  } | null>(null);
   const exitPreviewFullscreen = useCallback(() => {
     if (document.fullscreenElement === stage.current) {
       void document.exitFullscreen();
@@ -147,6 +157,7 @@ export function Preview({
     renderer.current = new Renderer();
     return () => {
       media.dispose();
+      renderer.current?.dispose();
       pool.current = null;
       renderer.current = null;
     };
@@ -282,6 +293,8 @@ export function Preview({
     e.stopPropagation();
     setPlaying(false);
     select({ kind: hit.kind, id: hit.id });
+    const item = hit.kind === "text" ? project.texts.find((t) => t.id === hit.id) : project.clips.find((c) => c.id === hit.id);
+    if (!item || project.lockedTracks.includes(trackKey(item))) return;
     dispatch({ type: "begin" });
     e.currentTarget.setPointerCapture(e.pointerId);
     setSnapGuides({ x: false, y: false });
@@ -296,6 +309,24 @@ export function Preview({
     };
   }
   function move(e: PointerEvent<HTMLElement>) {
+    if (maskDrag.current && canvas.current) {
+      const d = maskDrag.current, rect = canvas.current.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const x = (e.clientX - rect.left) / rect.width * canvas.current.width;
+      const y = (e.clientY - rect.top) / rect.height * canvas.current.height;
+      const original = d.kind === "text" ? d.project.texts.find((t) => t.id === d.id)! : d.project.clips.find((c) => c.id === d.id)!;
+      const angle = Math.atan2(y - d.geometry.y, x - d.geometry.x);
+      const delta = Math.atan2(Math.sin(angle - d.startAngle), Math.cos(angle - d.startAngle)) * 180 / Math.PI;
+      const patch = maskDragPatch(animatedItem(original, d.time), d.frame, d.geometry, d.mode, x - d.x, y - d.y, delta);
+      if (e.shiftKey && typeof patch.maskRotation === "number") patch.maskRotation = Math.round(patch.maskRotation / 15) * 15;
+      dispatch({ type: "preview", fn: (p) => {
+        const current = d.kind === "text" ? p.texts.find((t) => t.id === d.id) : p.clips.find((c) => c.id === d.id);
+        if (!current || p.lockedTracks.includes(trackKey(current))) return p;
+        return d.kind === "text" ? { ...p, texts: p.texts.map((t) => t.id === d.id ? applyMaskPatch(original as typeof t, patch, d.time, p.fps) : t) }
+          : { ...p, clips: p.clips.map((c) => c.id === d.id ? applyMaskPatch(original as typeof c, patch, d.time, p.fps) : c) };
+      } });
+      return;
+    }
     const d = drag.current;
     if (!d || !canvas.current) return;
     const rect = canvas.current.getBoundingClientRect(),
@@ -316,6 +347,8 @@ export function Preview({
     dispatch({
       type: "preview",
       fn: (p) => {
+        const current = d.kind === "text" ? p.texts.find((t) => t.id === d.id) : p.clips.find((c) => c.id === d.id);
+        if (!current || p.lockedTracks.includes(trackKey(current))) return p;
         if (d.kind === "text") {
           const original = d.project.texts.find((t) => t.id === d.id)!;
           return {
@@ -364,16 +397,18 @@ export function Preview({
     });
   }
   const finish = () => {
-    if (drag.current) {
+    if (drag.current || maskDrag.current) {
       drag.current = null;
+      maskDrag.current = null;
       setSnapGuides({ x: false, y: false });
       dispatch({ type: "commit" });
     }
   };
   useEffect(() => {
     const cancel = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && drag.current) {
+      if (e.key === "Escape" && (drag.current || maskDrag.current)) {
         drag.current = null;
+        maskDrag.current = null;
         setSnapGuides({ x: false, y: false });
         dispatch({ type: "cancel" });
       }
@@ -383,6 +418,26 @@ export function Preview({
   }, [dispatch]);
   const size = dimensions(project.ratio, 540),
     duration = projectDuration(project);
+  const sourceItem = selection?.kind === "text" ? project.texts.find((t) => t.id === selection.id)
+    : project.clips.find((c) => c.id === selection?.id);
+  const selectedItem = sourceItem ? animatedItem(sourceItem, time) : undefined;
+  const locked = Boolean(selectedItem && project.lockedTracks.includes(trackKey(selectedItem)));
+  const mask = selectedItem ? normalizeCompositing(selectedItem) : null;
+  const maskActive = Boolean(bound && selectedItem && mask?.maskShape !== "None" && editingMask === selectedItem.id && !playing);
+  const contentFrame: MaskFrame | null = bound;
+  const geometry = selectedItem && contentFrame ? maskGeometry(selectedItem, contentFrame, size.width, size.height) : null;
+  function beginMask(e: PointerEvent<HTMLElement>, mode: "move" | "size" | "rotate") {
+    if (e.button !== 0 || !canvas.current || !geometry || !contentFrame || !selectedItem || locked) return;
+    e.preventDefault(); e.stopPropagation();
+    setPlaying(false);
+    const rect = canvas.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width * size.width, y = (e.clientY - rect.top) / rect.height * size.height;
+    maskDrag.current = { id: selectedItem.id, kind: selection!.kind, mode, x, y, time, project, geometry,
+      frame: mask?.maskSpace === "canvas" ? { x: size.width / 2, y: size.height / 2, width: size.width, height: size.height, rotation: 0 } : contentFrame,
+      startAngle: Math.atan2(y - geometry.y, x - geometry.x) };
+    dispatch({ type: "begin" });
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
   return (
     <section className="preview-panel">
       <div className="panel-heading">
@@ -390,6 +445,12 @@ export function Preview({
           Player <span className="subtle-badge">{project.ratio}</span>
         </span>
         <div className="tool-group">
+          {selectedItem && mask?.maskShape !== "None" && <button type="button"
+            title="Edit mask on canvas" aria-label="Edit mask" aria-pressed={maskActive} disabled={locked}
+            className={maskActive ? "active mask-edit-button" : "mask-edit-button"}
+            onClick={() => { setPlaying(false); setEditingMask(editingMask === selectedItem.id ? null : selectedItem.id); }}>
+            <Shapes size={15} /><span>Edit mask</span>
+          </button>}
           <button
             title="Composition guides"
             aria-label="Toggle composition guides"
@@ -423,6 +484,7 @@ export function Preview({
           onPointerUp={finish}
           onPointerCancel={() => {
             drag.current = null;
+            maskDrag.current = null;
             setSnapGuides({ x: false, y: false });
             dispatch({ type: "cancel" });
           }}
@@ -432,7 +494,7 @@ export function Preview({
             width={size.width}
             height={size.height}
             aria-label="Video preview. Drag selected video or text to reposition it."
-            onPointerDown={(e) => begin(e, "move")}
+            onPointerDown={(e) => maskActive ? beginMask(e, "move") : begin(e, "move")}
           />
           {guides && (
             <div className="composition-guides">
@@ -448,9 +510,10 @@ export function Preview({
               {snapGuides.y && <b />}
             </div>
           )}
-          {bound && !playing && (
+          {maskActive && geometry && <MaskOverlay geometry={geometry} size={size} locked={locked} begin={beginMask} />}
+          {bound && !playing && !maskActive && (
             <div
-              className="selection-box"
+              className={"selection-box" + (locked ? " selection-locked" : "")}
               style={{
                 left: (bound.x / size.width) * 100 + "%",
                 top: (bound.y / size.height) * 100 + "%",
@@ -467,10 +530,11 @@ export function Preview({
                 className="corner bottom-right"
                 title="Drag to resize"
                 aria-label="Resize selected layer"
+                disabled={locked}
                 onPointerDown={(e) => begin(e, "scale")}
               />
               <div className="selection-label">
-                {bound.kind === "text" ? "Text" : "Video"} · drag to move
+                {locked ? <><LockKeyhole size={11} /> Locked layer</> : <>{bound.kind === "text" ? "Text" : "Video"} · drag to move</>}
               </div>
             </div>
           )}
@@ -550,4 +614,29 @@ export function Preview({
       </div>
     </section>
   );
+}
+function MaskOverlay({ geometry: g, size, locked, begin }: {
+  geometry: MaskGeometry; size: { width: number; height: number }; locked: boolean;
+  begin: (e: PointerEvent<HTMLElement>, mode: "move" | "size" | "rotate") => void;
+}) {
+  const angle = g.rotation * Math.PI / 180;
+  const point = (x: number, y: number) => ({ x: g.x + Math.cos(angle) * x - Math.sin(angle) * y, y: g.y + Math.sin(angle) * x + Math.cos(angle) * y });
+  const halfWidth = g.shape === "Linear" || g.shape === "Mirror" ? size.width / 2 : g.width / 2;
+  const height = g.shape === "Linear" ? 0 : g.height / 2;
+  const rotation = point(0, -height - 32), corner = point(halfWidth, height);
+  const position = (p: { x: number; y: number }) => ({ left: p.x / size.width * 100 + "%", top: p.y / size.height * 100 + "%" });
+  return <div className="mask-overlay" aria-label="Mask editing controls">
+    <svg viewBox={`0 0 ${size.width} ${size.height}`} preserveAspectRatio="none" aria-hidden="true">
+      <g transform={`translate(${g.x} ${g.y}) rotate(${g.rotation})`}>
+        {g.shape === "Linear" ? <path className="mask-outline" d={`M ${-size.width * 2} 0 H ${size.width * 2}`} />
+          : g.shape === "Mirror" ? <path className="mask-outline" d={`M ${-size.width * 2} ${-height} H ${size.width * 2} M ${-size.width * 2} ${height} H ${size.width * 2}`} />
+            : <path className="mask-outline" vectorEffect="non-scaling-stroke" d={maskSvgPath(g.shape)} transform={`scale(${g.flipX ? -g.width : g.width} ${g.flipY ? -g.height : g.height}) translate(-.5 -.5)`} />}
+        <path className="mask-handle-line" d={`M 0 ${-height} V ${-height - 32}`} />
+      </g>
+    </svg>
+    <button type="button" className="mask-move-handle" aria-label="Move mask" title="Drag mask position" disabled={locked} style={position(g)} onPointerDown={(e) => begin(e, "move")}><Shapes size={13} /></button>
+    {g.shape !== "Linear" && <button type="button" className="mask-size-handle" aria-label="Resize mask" title="Drag mask size" disabled={locked} style={position(corner)} onPointerDown={(e) => begin(e, "size")} />}
+    <button type="button" className="mask-rotate-handle" aria-label="Rotate mask" title="Drag to rotate · Shift snaps 15°" disabled={locked} style={position(rotation)} onPointerDown={(e) => begin(e, "rotate")} />
+    <span className="mask-overlay-label">{g.shape} mask{g.invert ? " · inverted" : ""}</span>
+  </div>;
 }

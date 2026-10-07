@@ -34,6 +34,10 @@ import {
   ClipboardPaste,
   Flag,
   Bookmark,
+  LockKeyhole,
+  LockKeyholeOpen,
+  AlignStartHorizontal,
+  AlignEndHorizontal,
 } from "lucide-react";
 import {
   clamp,
@@ -61,8 +65,9 @@ import {
 import { TRANSITIONS } from "./presets";
 import { historyReducer } from "./useProject";
 import { waveformColumns } from "./waveform";
+import { alignSelectionToPlayhead, isTrackLocked, selectionItems } from "./timelineOperations";
 type Action = Parameters<typeof historyReducer>[1];
-type MenuAction = "copy" | "paste" | "split" | "freeze" | "duplicate" | "delete";
+type MenuAction = "copy" | "paste" | "split" | "freeze" | "duplicate" | "delete" | "detach-audio";
 type Props = {
   project: Project;
   selection: Selection;
@@ -195,6 +200,8 @@ export function Timeline({
     (c) => c.id === selection?.id,
   );
   const menuItem = menu && [...project.clips, ...project.texts].find((c) => c.id === menu.id);
+  const selectedLocked = selectionItems(project, selected).some((item) => isTrackLocked(project, item.track));
+  const menuLocked = !!menuItem && isTrackLocked(project, menuItem.track);
   useEffect(() => {
     if (!menu) return;
     document.querySelector<HTMLElement>(".clip-context-menu button:not(:disabled)")?.focus();
@@ -220,7 +227,8 @@ export function Timeline({
     e.preventDefault();
     e.stopPropagation();
     if ((e.target as Element).closest(".trim-handle")) return;
-    select({ kind: "assetId" in item ? "clip" : "text", id: item.id });
+    if (!selected.some((value) => value.id === item.id))
+      select({ kind: "assetId" in item ? "clip" : "text", id: item.id });
     if (e.type === "dblclick" && content.current) {
       const clicked = roundFrame((e.clientX - content.current.getBoundingClientRect().left) / pps, project.fps);
       seek(clamp(clicked, item.start, endOf(item) - 1 / project.fps));
@@ -228,11 +236,17 @@ export function Timeline({
     setMenu({
       id: item.id,
       x: Math.max(8, Math.min(e.clientX, window.innerWidth - 234)),
-      y: Math.max(8, Math.min(e.clientY, window.innerHeight - 420)),
+      y: Math.max(8, Math.min(e.clientY, window.innerHeight - 550)),
     });
   }
   function menuAction(action: MenuAction) {
     if (menuItem) onClipMenuAction(action, menuItem);
+    setMenu(null);
+  }
+  function align(edge: "start" | "end", item?: Clip | TextClip) {
+    const values = item && !selected.some((value) => value.id === item.id)
+      ? [{ kind: "assetId" in item ? "clip" as const : "text" as const, id: item.id }] : selected;
+    edit((p) => alignSelectionToPlayhead(p, values, time, edge));
     setMenu(null);
   }
   function isTransitionDrag(e: ReactDragEvent<HTMLElement>) {
@@ -254,6 +268,8 @@ export function Timeline({
     const raw = e.dataTransfer.getData("application/cutline-transition") || draggingTransition;
     const name = TRANSITIONS.find((t) => t.name === raw)?.name;
     setHoverJoinId(null);
+    const incoming = project.clips.find((clip) => clip.id === incomingId);
+    if (incoming && isTrackLocked(project, incoming.track)) return;
     if (name) onApplyTransition(incomingId, name);
   }
   const latest = useRef({ project, pps, snapping, time, seek });
@@ -311,6 +327,7 @@ export function Timeline({
         const points = [
           0,
           playhead,
+          ...p.markers.map((marker) => marker.time),
           ...[...p.clips, ...p.texts]
             .filter((i) => !movingIds.has(i.id))
             .flatMap((i) => [i.start, endOf(i)]),
@@ -356,11 +373,17 @@ export function Timeline({
           );
           setGuide(snapped.guide);
         }
+        const trackDelta = Math.max(-Math.min(...d.group.map((member) => member.track)), item.track - d.item.track);
+        const moveDelta = Math.max(-Math.min(...d.group.map((member) => member.start)), item.start - d.item.start);
         const movedGroup = d.type === "move" && d.group.length > 1
           ? d.group.map((member) => ({ ...member,
-              start: Math.max(0, member.start + item.start - d.item.start),
-              track: Math.max(0, member.track + item.track - d.item.track),
+              start: member.start + moveDelta,
+              track: member.track + trackDelta,
             })) : [item];
+        if (d.group.some((member) => isTrackLocked(p, member.track)) || movedGroup.some((member) => isTrackLocked(p, member.track))) {
+          setGuide(null);
+          return;
+        }
         const serialized = JSON.stringify(movedGroup);
         if (serialized !== d.last) {
           d.last = serialized;
@@ -415,6 +438,9 @@ export function Timeline({
     if (time < item.start || time >= endOf(item))
       seek(item.start + Math.min(0.1, (endOf(item) - item.start) / 2));
     else seek(time);
+    const group = type === "move" && selected.some((s) => s.id === item.id) && selected.length > 1
+      ? selectionItems(project, selected) : [item];
+    if (group.some((member) => isTrackLocked(project, member.track))) return;
     dispatch({ type: "begin" });
     // The clip is reparented when changing layers. Capture on a stable ancestor
     // so the browser continues delivering pointer events throughout the drag.
@@ -422,8 +448,7 @@ export function Timeline({
     capture.setPointerCapture(e.pointerId);
     dragging.current = {
       item,
-      group: type === "move" && selected.some((s) => s.id === item.id) && selected.length > 1
-        ? [...project.clips, ...project.texts].filter((member) => selected.some((s) => s.id === member.id)) : [item],
+      group,
       type,
       kind,
       x: e.clientX,
@@ -555,7 +580,7 @@ export function Timeline({
           <button
             title="Split at playhead · Ctrl B"
             aria-label="Split at playhead"
-            disabled={!selection}
+            disabled={!selection || selectedLocked}
             onClick={() => split()}
           >
             <Scissors size={17} />
@@ -563,7 +588,7 @@ export function Timeline({
           <button
             title="Duplicate · Ctrl D"
             aria-label="Duplicate clip"
-            disabled={!selection}
+            disabled={!selection || selectedLocked}
             onClick={duplicate}
           >
             <Copy size={17} />
@@ -571,7 +596,7 @@ export function Timeline({
           <button
             title="Delete · Del"
             aria-label="Delete clip"
-            disabled={!selection}
+            disabled={!selection || !selectionItems(project, selected).some((item) => !isTrackLocked(project, item.track))}
             onClick={() => remove()}
           >
             <Trash2 size={17} />
@@ -580,7 +605,7 @@ export function Timeline({
           <button
             aria-label="Move to layer above"
             title="Move selected clip to the layer above"
-            disabled={!selectedItem}
+            disabled={!selectedItem || isTrackLocked(project, selectedItem.track) || isTrackLocked(project, selectedItem.track + 1)}
             onClick={() =>
               selectedItem &&
               edit((p) => moveToLayer(p, selection, selectedItem.track + 1))
@@ -591,7 +616,7 @@ export function Timeline({
           <button
             aria-label="Move to layer below"
             title="Move selected clip to the layer below"
-            disabled={!selectedItem}
+            disabled={!selectedItem || isTrackLocked(project, selectedItem.track) || (selectedItem.track > 0 && isTrackLocked(project, selectedItem.track - 1))}
             onClick={() =>
               selectedItem &&
               edit((p) => moveToLayer(p, selection, selectedItem.track - 1))
@@ -599,11 +624,18 @@ export function Timeline({
           >
             <ArrowDown size={17} />
           </button>
+          <button aria-label="Move selection start to playhead" title="Move selected clips together so their earliest start meets the playhead" disabled={!selected.length || selectedLocked} onClick={() => align("start")}>
+            <AlignStartHorizontal size={17} />
+          </button>
+          <button aria-label="Move selection end to playhead" title="Move selected clips together so their latest end meets the playhead" disabled={!selected.length || selectedLocked} onClick={() => align("end")}>
+            <AlignEndHorizontal size={17} />
+          </button>
         </div>
         <div className="tool-group timeline-options">
           <button
             className={snapping ? "active" : ""}
-            title="Snap to clip edges · hold Alt to bypass"
+            title="Snap to clip edges, playhead, and beat/moment markers · hold Alt to bypass"
+            aria-pressed={snapping}
             onClick={() => setSnapping(!snapping)}
           >
             <Magnet size={16} />
@@ -620,7 +652,7 @@ export function Timeline({
             className={hasBeatMarker ? "active timeline-marker-toolbar" : ""}
             aria-label="Mark beat"
             aria-pressed={hasBeatMarker}
-            title="Mark or remove a beat at the playhead"
+            title="Mark or remove a beat at the playhead · M"
             onClick={() => edit((p) => toggleTimelineMarker(p, time, "beat"))}
           >
             <Flag size={15} />
@@ -630,7 +662,7 @@ export function Timeline({
             className={hasMomentMarker ? "active timeline-marker-toolbar moment" : ""}
             aria-label="Mark moment"
             aria-pressed={hasMomentMarker}
-            title="Mark or remove an important moment at the playhead"
+            title="Mark or remove an important moment at the playhead · Shift M"
             onClick={() => edit((p) => toggleTimelineMarker(p, time, "moment"))}
           >
             <Bookmark size={15} />
@@ -705,13 +737,25 @@ export function Timeline({
           {lanes.map((l) => {
             const key = "layer:" + l.track,
               hidden = project.hiddenTracks.includes(key),
-              muted = project.mutedTracks.includes(key);
+              muted = project.mutedTracks.includes(key),
+              locked = isTrackLocked(project, l.track);
             return (
-              <div key={key} className="track-header lane-layer">
+              <div key={key} className={`track-header lane-layer${locked ? " track-locked" : ""}`}>
                 <span title="Any clip type. Higher layers appear in front.">
                   <Layers size={14} /> Layer {l.track + 1}
                 </span>
                 <div>
+                  <button
+                    title={locked ? "Unlock layer to edit its clips" : "Lock layer to protect its clips"}
+                    aria-label={(locked ? "Unlock " : "Lock ") + key}
+                    aria-pressed={locked}
+                    className={locked ? "locked-active" : ""}
+                    onClick={() => edit((p) => ({ ...p, lockedTracks: locked
+                      ? (p.lockedTracks ?? []).filter((value) => value !== key)
+                      : [...(p.lockedTracks ?? []), key] }))}
+                  >
+                    {locked ? <LockKeyhole size={13} /> : <LockKeyholeOpen size={13} />}
+                  </button>
                   <button
                     title={hidden ? "Show track" : "Hide track"}
                     aria-label={(hidden ? "Show " : "Hide ") + key}
@@ -802,10 +846,17 @@ export function Timeline({
                   type="button"
                   className={`timeline-marker ${marker.kind}`}
                   style={{ left: marker.time * pps }}
-                  aria-label={`Go to ${marker.kind === "beat" ? "beat" : "important moment"} ${index + 1} at ${clock(marker.time, true, project.fps)}; right-click to remove`}
-                  title={`${marker.kind === "beat" ? "Beat" : "Moment"} · ${clock(marker.time, true, project.fps)} · click to seek, right-click to remove`}
+                  aria-label={`Go to ${marker.kind === "beat" ? "beat" : "important moment"} ${index + 1} at ${clock(marker.time, true, project.fps)}; Delete or right-click to remove`}
+                  title={`${marker.kind === "beat" ? "Beat" : "Moment"} · ${clock(marker.time, true, project.fps)} · click to seek, Delete or right-click to remove`}
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={() => seek(marker.time)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Delete" || event.key === "Backspace") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      edit((p) => ({ ...p, markers: p.markers.filter((item) => item.id !== marker.id) }));
+                    }
+                  }}
                   onContextMenu={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -818,6 +869,7 @@ export function Timeline({
             </div>
             {lanes.map((l) => {
               const key = "layer:" + l.track;
+              const locked = isTrackLocked(project, l.track);
               const items = [...project.clips, ...project.texts]
                 .filter((c) => c.track === l.track)
                 .sort((a, b) => a.start - b.start);
@@ -830,6 +882,7 @@ export function Timeline({
                   className={
                     "timeline-lane lane-layer" +
                     (project.hiddenTracks.includes(key) ? " track-hidden" : "")
+                    + (locked ? " track-locked" : "")
                   }
                   style={{ backgroundSize: pps * rulerStep + "px 100%" }}
                   onPointerDown={(e) => {
@@ -839,6 +892,7 @@ export function Timeline({
                   }}
                   onDragOver={(e) => {
                     e.preventDefault();
+                    if (locked) { e.dataTransfer.dropEffect = "none"; return; }
                     if (isTransitionDrag(e)) {
                       const join = joinAt(l.track, e.clientX);
                       setHoverJoinId(join?.id ?? null);
@@ -847,6 +901,7 @@ export function Timeline({
                   }}
                   onDrop={(e) => {
                     e.preventDefault();
+                    if (locked) return;
                     if (isTransitionDrag(e)) {
                       dropTransition(e, joinAt(l.track, e.clientX)?.id ?? null);
                       return;
@@ -875,6 +930,7 @@ export function Timeline({
                             [
                               0,
                               time,
+                              ...project.markers.map((marker) => marker.time),
                               ...[...project.clips, ...project.texts].flatMap(
                                 (c) => [c.start, endOf(c)],
                               ),
@@ -923,7 +979,7 @@ export function Timeline({
                         }
                         title={
                           ("text" in item ? item.text : item.label) +
-                          "\nDrag to move • drag edges to trim • Alt bypasses snap"
+                          (locked ? "\nLayer locked · unlock to edit" : "\nDrag to move • drag edges to trim • Alt bypasses snap")
                         }
                         className={
                           "timeline-clip clip-" +
@@ -943,6 +999,7 @@ export function Timeline({
                           if (!clip || !isTransitionDrag(e)) return;
                           e.preventDefault();
                           e.stopPropagation();
+                          if (locked) { e.dataTransfer.dropEffect = "none"; return; }
                           const join = joinAt(clip.track, e.clientX, clip.id);
                           setHoverJoinId(join?.id ?? null);
                           e.dataTransfer.dropEffect = join ? "copy" : "none";
@@ -958,7 +1015,7 @@ export function Timeline({
                             e.preventDefault();
                             select({ kind: clip ? "clip" : "text", id: item.id });
                             const rect = e.currentTarget.getBoundingClientRect();
-                            setMenu({ id: item.id, x: Math.max(8, Math.min(rect.left + 12, window.innerWidth - 234)), y: Math.max(8, Math.min(rect.bottom, window.innerHeight - 420)) });
+                            setMenu({ id: item.id, x: Math.max(8, Math.min(rect.left + 12, window.innerWidth - 234)), y: Math.max(8, Math.min(rect.bottom, window.innerHeight - 550)) });
                             return;
                           }
                           if (e.key === "Enter") {
@@ -1016,6 +1073,7 @@ export function Timeline({
                           role="slider"
                           tabIndex={isSelected ? 0 : -1}
                           aria-label="Trim start"
+                          aria-disabled={locked}
                           aria-valuenow={item.start}
                           className="trim-handle left"
                           onPointerDown={(e) => begin(e, item, "left")}
@@ -1024,6 +1082,7 @@ export function Timeline({
                           role="slider"
                           tabIndex={isSelected ? 0 : -1}
                           aria-label="Trim end"
+                          aria-disabled={locked}
                           aria-valuenow={endOf(item)}
                           className="trim-handle right"
                           onPointerDown={(e) => begin(e, item, "right")}
@@ -1041,6 +1100,7 @@ export function Timeline({
                         {window && <span className="transition-span" style={{ left: window.start * pps, width: window.duration * pps }} title={`${incoming.transition} between ${previous.label} and ${incoming.label}`} />}
                         <button
                           type="button"
+                          disabled={locked}
                           className={
                             "transition-join" +
                             (incoming.transition !== "None" ? " applied" : "") +
@@ -1103,17 +1163,21 @@ export function Timeline({
         >
           <div className="clip-menu-heading" title={menuItem.label}>{menuItem.label}</div>
           <button role="menuitem" onClick={() => menuAction("copy")}><Copy size={15} />Copy <kbd>Ctrl C</kbd></button>
-          <button role="menuitem" disabled={!hasClipboard} onClick={() => menuAction("paste")}><ClipboardPaste size={15} />Paste at playhead <kbd>Ctrl V</kbd></button>
-          <button role="menuitem" onClick={() => menuAction("duplicate")}><Copy size={15} />Duplicate <kbd>Ctrl D</kbd></button>
+          <button role="menuitem" disabled={!hasClipboard || menuLocked} onClick={() => menuAction("paste")}><ClipboardPaste size={15} />Paste at playhead <kbd>Ctrl V</kbd></button>
+          <button role="menuitem" disabled={menuLocked} onClick={() => menuAction("duplicate")}><Copy size={15} />Duplicate <kbd>Ctrl D</kbd></button>
           <div className="clip-menu-divider" />
-          <button role="menuitem" onClick={() => menuAction("split")}><Scissors size={15} />Split at playhead <kbd>Ctrl B</kbd></button>
+          <button role="menuitem" disabled={menuLocked} onClick={() => menuAction("split")}><Scissors size={15} />Split at playhead <kbd>Ctrl B</kbd></button>
           {"assetId" in menuItem && menuItem.kind === "video" && project.assets.find((a) => a.id === menuItem.assetId)?.kind === "video" && menuItem.frozenAt === undefined &&
-            <button role="menuitem" onClick={() => menuAction("freeze")}><Snowflake size={15} />Freeze frame <kbd>2 sec</kbd></button>}
+            <button role="menuitem" disabled={menuLocked} onClick={() => menuAction("freeze")}><Snowflake size={15} />Freeze frame <kbd>2 sec</kbd></button>}
+          {"assetId" in menuItem && menuItem.kind === "video" && project.assets.find((asset) => asset.id === menuItem.assetId)?.kind === "video" && menuItem.frozenAt === undefined &&
+            <button role="menuitem" disabled={menuLocked} onClick={() => menuAction("detach-audio")}><Music2 size={15} />Detach audio</button>}
+          <button role="menuitem" disabled={menuLocked || selectedLocked} onClick={() => align("start", menuItem)}><AlignStartHorizontal size={15} />Move selection start to playhead</button>
+          <button role="menuitem" disabled={menuLocked || selectedLocked} onClick={() => align("end", menuItem)}><AlignEndHorizontal size={15} />Move selection end to playhead</button>
           <div className="clip-menu-divider" />
-          <button role="menuitem" onClick={() => { edit((p) => moveToLayer(p, { kind: "assetId" in menuItem ? "clip" : "text", id: menuItem.id }, menuItem.track + 1)); setMenu(null); }}><ArrowUp size={15} />Move to layer above</button>
-          <button role="menuitem" onClick={() => { edit((p) => moveToLayer(p, { kind: "assetId" in menuItem ? "clip" : "text", id: menuItem.id }, menuItem.track - 1)); setMenu(null); }}><ArrowDown size={15} />Move to layer below</button>
+          <button role="menuitem" disabled={menuLocked || isTrackLocked(project, menuItem.track + 1)} onClick={() => { edit((p) => moveToLayer(p, { kind: "assetId" in menuItem ? "clip" : "text", id: menuItem.id }, menuItem.track + 1)); setMenu(null); }}><ArrowUp size={15} />Move to layer above</button>
+          <button role="menuitem" disabled={menuLocked || (menuItem.track > 0 && isTrackLocked(project, menuItem.track - 1))} onClick={() => { edit((p) => moveToLayer(p, { kind: "assetId" in menuItem ? "clip" : "text", id: menuItem.id }, menuItem.track - 1)); setMenu(null); }}><ArrowDown size={15} />Move to layer below</button>
           <div className="clip-menu-divider" />
-          <button role="menuitem" onClick={() => menuAction("delete")}><Trash2 size={15} />Delete <kbd>Del</kbd></button>
+          <button role="menuitem" disabled={menuLocked} onClick={() => menuAction("delete")}><Trash2 size={15} />Delete <kbd>Del</kbd></button>
         </div>, document.body,
       )}
     </section>

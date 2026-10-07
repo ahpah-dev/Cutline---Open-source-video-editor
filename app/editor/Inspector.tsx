@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { CropDialog } from "./CropDialog";
 import { FULL_CROP, normalizeCrop } from "./crop";
+import { BLEND_MODES, DEFAULT_COMPOSITING, MASK_SHAPES, maskSvgPath, normalizeCompositing, type VisualCompositing } from "./visualCompositing";
+import { normalizeAudioGain } from "./waveform";
 import {
   SlidersHorizontal,
   RotateCcw,
@@ -21,6 +23,7 @@ import {
   Trash2,
   RefreshCw,
   Crop,
+  LockKeyhole,
 } from "lucide-react";
 import {
   ANIMATIONS,
@@ -46,6 +49,7 @@ import {
   setPropertyKeyframe,
   togglePropertyKeyframe,
   transitionSource,
+  trackKey,
   type Clip,
   type ComboAnimation,
   type ComboAnimationName,
@@ -71,7 +75,7 @@ export function Inspector({
   project,
   selection,
   time,
-  edit,
+  edit: editProject,
   clear,
   focusEffects,
   previewAnimation,
@@ -124,6 +128,15 @@ export function Inspector({
       : undefined;
   const clip = sourceClip ? animatedItem(sourceClip, time) : undefined;
   const text = sourceText ? animatedItem(sourceText, time) : undefined;
+  const selectedItem = sourceText ?? sourceClip;
+  const locked = Boolean(selectedItem && project.lockedTracks.includes(trackKey(selectedItem)));
+  // Check the current project as well as the rendered state: an open dialog or
+  // deferred change must never mutate a layer that was subsequently locked.
+  const edit: Props["edit"] = (fn, group) => editProject((p) => {
+    const item = selection?.kind === "text" ? p.texts.find((t) => t.id === selection.id)
+      : p.clips.find((c) => c.id === selection?.id);
+    return item && p.lockedTracks.includes(trackKey(item)) ? p : fn(p);
+  }, group);
   const commonFontNames = new Set(FONTS.map((font) => font.toLocaleLowerCase()));
   const extraInstalledFonts = installedFonts.filter(
     (font) => !commonFontNames.has(font.toLocaleLowerCase()),
@@ -317,8 +330,8 @@ export function Inspector({
     setDeletePresetId(null);
   };
   const activeTab = (text
-    ? ["Basic", "Style", "Animation", "Effects"]
-    : clip?.kind === "audio" ? ["Basic", "Audio"] : ["Basic", "Animation", "Color", "Audio"]
+    ? ["Basic", "Style", "Animation", "Effects", "Mask"]
+    : clip?.kind === "audio" ? ["Basic", "Audio"] : ["Basic", "Animation", "Color", "Audio", "Mask"]
   ).includes(tab)
     ? tab
     : "Basic";
@@ -416,10 +429,10 @@ export function Inspector({
           </div>
           <div className="inspector-tabs">
             {(text
-              ? ["Basic", "Style", "Animation", "Effects"]
+              ? ["Basic", "Style", "Animation", "Effects", "Mask"]
               : clip?.kind === "audio"
                 ? ["Basic", "Audio"]
-                : ["Basic", "Animation", "Color", "Audio"]
+                : ["Basic", "Animation", "Color", "Audio", "Mask"]
             ).map((t) => (
               <button
                 className={activeTab === t ? "active" : ""}
@@ -431,6 +444,31 @@ export function Inspector({
             ))}
           </div>
           <div className="inspector-scroll">
+            {locked && <div className="locked-layer-notice"><LockKeyhole size={14} /> Layer locked. Unlock it in the timeline to edit.</div>}
+            <fieldset className="inspector-controls" disabled={locked}>
+            {animationItem && activeTab === "Basic" && <Section title="Compositing">
+              <Field label="Blend mode" keyframe={keyButton(animationItem, "blendMode", animationItem.blendMode ?? "Normal")}>
+                <select aria-label="Blend mode" value={animationItem.blendMode ?? "Normal"}
+                  onChange={(e) => updateAnimationItem({ blendMode: e.target.value as VisualCompositing["blendMode"] })}>
+                  {BLEND_MODES.map((mode) => <option key={mode}>{mode}</option>)}
+                </select>
+              </Field>
+              <p className="field-note">Blend this layer with everything underneath it.</p>
+            </Section>}
+            {animationItem && activeTab === "Mask" && <>
+              <MaskControls item={animationItem} onChange={updateAnimationItem}
+                keyframe={(name, value) => keyButton(animationItem, name, value)}
+                reset={() => edit((p) => {
+                  const reset = <T extends Clip | TextClip>(item: T): T => {
+                    if (item.id !== animationItem.id) return item;
+                    const propertyKeyframes = Object.fromEntries(Object.entries(item.propertyKeyframes ?? {}).filter(([name]) => !name.startsWith("mask")));
+                    const maskDefaults = Object.fromEntries(Object.entries(DEFAULT_COMPOSITING).filter(([name]) => name.startsWith("mask")));
+                    return { ...item, ...maskDefaults, propertyKeyframes };
+                  };
+                  return { ...p, clips: p.clips.map(reset), texts: p.texts.map(reset) };
+                })} />
+              {clip && <ChromaControls item={clip} onChange={updateClip} keyframe={(name, value) => keyButton(clip, name, value)} />}
+            </>}
             {text && activeTab === "Basic" && (
               <>
                 <Section title="Content">
@@ -1232,8 +1270,21 @@ export function Inspector({
                   suffix="%"
                   onChange={(v) => updateClip({ volume: v / 100 })}
                 />
+                <Range label="Stereo pan" keyframe={ck("audioPan", clip.audioPan ?? 0)}
+                  value={(clip.audioPan ?? 0) * 100} min={-100} max={100} suffix="%"
+                  onChange={(v) => updateClip({ audioPan: v / 100 })} />
+                <div className="pan-labels"><span>Left</span><span>Center</span><span>Right</span></div>
+                <button type="button" className="normalize-audio-button"
+                  disabled={normalizeAudioGain(project.assets.find((asset) => asset.id === clip.assetId) ?? {}) === null}
+                  title="Set source peak to −1 dBFS (maximum gain 200%). This is peak normalization, not LUFS loudness matching."
+                  onClick={() => {
+                    const gain = normalizeAudioGain(project.assets.find((asset) => asset.id === clip.assetId) ?? {});
+                    if (gain !== null) updateClip({ volume: gain });
+                  }}>Normalize peak · −1 dBFS</button>
+                <p className="field-note">Peak normalization uses the imported source. Fades and volume keyframes still apply; gain is limited to 200%.</p>
                 <Range
                   label="Fade in"
+                  keyframe={ck("fadeIn", clip.fadeIn)}
                   value={clip.fadeIn}
                   min={0}
                   max={Math.min(10, clipDuration(clip))}
@@ -1243,6 +1294,7 @@ export function Inspector({
                 />
                 <Range
                   label="Fade out"
+                  keyframe={ck("fadeOut", clip.fadeOut)}
                   value={clip.fadeOut}
                   min={0}
                   max={Math.min(10, clipDuration(clip))}
@@ -1256,12 +1308,71 @@ export function Inspector({
                 </p>
               </Section>
             )}
+            </fieldset>
           </div>
         </>
       )}
       {clip && cropping === clip.id && project.assets.find((asset) => asset.id === clip.assetId) && <CropDialog key={clip.id} clip={clip} asset={project.assets.find((asset) => asset.id === clip.assetId)!} time={time} cancel={() => setCropping(null)} apply={(crop) => { updateClip({ crop, fit: "contain", fitExplicit: true }, "crop"); setCropping(null); }} />}
     </aside>
   );
+}
+function MaskControls({ item, onChange, keyframe, reset }: {
+  item: Clip | TextClip;
+  onChange: (patch: Partial<Clip> & Partial<TextClip>) => void;
+  keyframe: (name: string, value: string | number | boolean) => ReactNode;
+  reset: () => void;
+}) {
+  const m = normalizeCompositing(item);
+  return <Section title="Layer mask" action={<button type="button" title="Remove mask and mask keyframes" aria-label="Reset mask" onClick={reset}><RotateCcw size={14} /></button>}>
+    <div className="field-label">Shape {keyframe("maskShape", m.maskShape)}</div>
+    <div className="mask-presets" role="group" aria-label="Mask shape">
+      {MASK_SHAPES.map((shape) => <button type="button" key={shape} aria-pressed={m.maskShape === shape}
+        className={m.maskShape === shape ? "active" : ""} onClick={() => onChange({ maskShape: shape })}>
+        <svg viewBox="0 0 1 1" aria-hidden="true">
+          {shape === "None" ? <path d="M .1 .1 L .9 .9 M .9 .1 L .1 .9" fill="none" stroke="currentColor" strokeWidth=".06" />
+            : shape === "Linear" ? <><path d="M 0 .5 H 1 V 1 H 0 Z" /><path d="M 0 .5 H 1" stroke="currentColor" strokeWidth=".05" /></>
+            : shape === "Mirror" ? <path d="M 0 .28 H 1 V .72 H 0 Z" /> : <path d={maskSvgPath(shape)} />}
+        </svg><span>{shape}</span>
+      </button>)}
+    </div>
+    {m.maskShape === "None" ? <p className="field-note">Choose a shape to reveal part of your layer. Masks work on images, video, and text.</p> : <>
+      <p className="field-note mask-edit-hint">Use “Edit mask” above the player to move, resize, or rotate it. Add diamonds to animate any setting.</p>
+      <Field label="Reference" keyframe={keyframe("maskSpace", m.maskSpace)}>
+        <select aria-label="Mask reference" value={m.maskSpace} onChange={(e) => onChange({ maskSpace: e.target.value as "content" | "canvas" })}>
+          <option value="content">Layer · follows its transform</option><option value="canvas">Canvas · stays in place</option>
+        </select>
+      </Field>
+      <div className="field-pair">
+        <NumberField label="Mask X (%)" value={m.maskX * 100} min={-200} max={300} step={0.1} keyframe={keyframe("maskX", m.maskX)} onChange={(v) => onChange({ maskX: v / 100 })} />
+        <NumberField label="Mask Y (%)" value={m.maskY * 100} min={-200} max={300} step={0.1} keyframe={keyframe("maskY", m.maskY)} onChange={(v) => onChange({ maskY: v / 100 })} />
+      </div>
+      {m.maskShape !== "Linear" && <>
+        {m.maskShape !== "Mirror" && <Range label="Mask width" value={m.maskWidth * 100} min={1} max={300} step={0.1} suffix="%" keyframe={keyframe("maskWidth", m.maskWidth)} onChange={(v) => onChange({ maskWidth: v / 100 })} />}
+        <Range label={m.maskShape === "Mirror" ? "Band height" : "Mask height"} value={m.maskHeight * 100} min={1} max={300} step={0.1} suffix="%" keyframe={keyframe("maskHeight", m.maskHeight)} onChange={(v) => onChange({ maskHeight: v / 100 })} />
+      </>}
+      <Range label="Mask rotation" value={m.maskRotation} min={-360} max={360} suffix="°" keyframe={keyframe("maskRotation", m.maskRotation)} onChange={(maskRotation) => onChange({ maskRotation })} />
+      <Range label="Mask feather" value={m.maskFeather * 100} min={0} max={50} step={0.1} suffix="%" keyframe={keyframe("maskFeather", m.maskFeather)} onChange={(v) => onChange({ maskFeather: v / 100 })} />
+      <Toggle label="Invert mask" value={m.maskInvert} keyframe={keyframe("maskInvert", m.maskInvert)} onChange={(maskInvert) => onChange({ maskInvert })} />
+      <p className="field-note">Feather softens the edge. Invert hides the shape and reveals the area outside it.</p>
+    </>}
+  </Section>;
+}
+function ChromaControls({ item, onChange, keyframe }: {
+  item: Clip;
+  onChange: (patch: Partial<Clip>) => void;
+  keyframe: (name: string, value: string | number | boolean) => ReactNode;
+}) {
+  const c = normalizeCompositing(item);
+  return <Section title="Chroma key">
+    <Toggle label="Remove a color" value={c.chromaKey} keyframe={keyframe("chromaKey", c.chromaKey)} onChange={(chromaKey) => onChange({ chromaKey })} />
+    {c.chromaKey && <>
+      <Color label="Key color" value={c.chromaColor} keyframe={keyframe("chromaColor", c.chromaColor)} onChange={(chromaColor) => onChange({ chromaColor })} />
+      <Range label="Color tolerance" value={c.chromaTolerance * 100} min={0} max={100} step={0.1} suffix="%" keyframe={keyframe("chromaTolerance", c.chromaTolerance)} onChange={(v) => onChange({ chromaTolerance: v / 100 })} />
+      <Range label="Edge softness" value={c.chromaSoftness * 100} min={0} max={100} step={0.1} suffix="%" keyframe={keyframe("chromaSoftness", c.chromaSoftness)} onChange={(v) => onChange({ chromaSoftness: v / 100 })} />
+      <Range label="Spill suppression" value={c.chromaSpill * 100} min={0} max={100} suffix="%" keyframe={keyframe("chromaSpill", c.chromaSpill)} onChange={(v) => onChange({ chromaSpill: v / 100 })} />
+      <p className="field-note">For green/blue screens, not automatic subject cutout. Adjust tolerance until the background is removed without losing your subject.</p>
+    </>}
+  </Section>;
 }
 const GRADIENT_PALETTES = [
   { name: "Mint", colors: ["#ffffff", "#80efc1"], angle: 0 },

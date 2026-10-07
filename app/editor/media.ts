@@ -13,12 +13,14 @@ import {
 import { Renderer, type MediaSources } from "./renderer";
 import { analyzeAudioWaveform } from "./waveform";
 
-function ready(element: HTMLMediaElement, event: string, timeout = 20000) {
+function ready(element: HTMLMediaElement, event: string, timeout = 20000, signal?: AbortSignal) {
+  if (signal?.aborted) return Promise.reject(new DOMException("Media loading cancelled", "AbortError"));
   return new Promise<void>((resolve, reject) => {
     const cleanup = () => {
       clearTimeout(timer);
       element.removeEventListener(event, done);
       element.removeEventListener("error", fail);
+      signal?.removeEventListener("abort", aborted);
     };
     const done = () => {
       cleanup();
@@ -32,6 +34,10 @@ function ready(element: HTMLMediaElement, event: string, timeout = 20000) {
         ),
       );
     };
+    const aborted = () => {
+      cleanup();
+      reject(new DOMException("Media loading cancelled", "AbortError"));
+    };
     const timer = setTimeout(() => {
       cleanup();
       reject(
@@ -42,6 +48,7 @@ function ready(element: HTMLMediaElement, event: string, timeout = 20000) {
     }, timeout);
     element.addEventListener(event, done, { once: true });
     element.addEventListener("error", fail, { once: true });
+    signal?.addEventListener("abort", aborted, { once: true });
   });
 }
 export async function inspectFile(file: File): Promise<Asset> {
@@ -67,6 +74,7 @@ export async function inspectFile(file: File): Promise<Asset> {
         : (file.size / 1024 / 1024).toFixed(1) + " MB",
     theme: kind,
   };
+  let mediaElement: HTMLMediaElement | null = null;
   try {
     if (kind === "image") {
       const img = new Image();
@@ -85,6 +93,7 @@ export async function inspectFile(file: File): Promise<Asset> {
       const element = document.createElement(
         kind === "audio" ? "audio" : "video",
       );
+      mediaElement = element;
       element.preload = "auto";
       element.muted = true;
       const loaded = ready(element, "loadeddata");
@@ -113,15 +122,19 @@ export async function inspectFile(file: File): Promise<Asset> {
       }
       element.removeAttribute("src");
       element.load();
-      if (kind === "audio") {
-        const waveform = await analyzeAudioWaveform(file);
-        if (waveform) Object.assign(asset, waveform);
-      }
+      const waveform = await analyzeAudioWaveform(file);
+      if (waveform) Object.assign(asset, waveform);
     }
     return asset;
   } catch (error) {
     URL.revokeObjectURL(url);
     throw error;
+  } finally {
+    if (mediaElement) {
+      mediaElement.pause();
+      mediaElement.removeAttribute("src");
+      mediaElement.load();
+    }
   }
 }
 
@@ -132,12 +145,16 @@ export class MediaPool {
   private pending = new Map<string, Promise<void>>();
   private urls = new Map<string, string>();
   private gains = new Map<string, GainNode>();
+  private pans = new Map<string, StereoPannerNode>();
   private nodes = new Map<string, MediaElementAudioSourceNode>();
+  private controllers = new Map<string, AbortController>();
   context: AudioContext | null = null;
   destination: MediaStreamAudioDestinationNode | null = null;
   private disposed = false;
+  private exporting = false;
   async ensure(project: Project) {
-    const ids = new Set(project.clips.map((c) => c.id));
+    if (this.disposed) return;
+    const ids = new Set(project.clips.filter((c) => project.assets.find((a) => a.id === c.assetId)?.url).map((c) => c.id));
     for (const id of this.urls.keys()) if (!ids.has(id)) this.remove(id);
     await Promise.all(
       project.clips.map((c) => {
@@ -145,13 +162,15 @@ export class MediaPool {
         if (!asset?.url) return;
         if (this.urls.get(c.id) === asset.url) return this.pending.get(c.id);
         this.remove(c.id);
+        const controller = new AbortController();
+        this.controllers.set(c.id, controller);
         this.urls.set(c.id, asset.url);
         const promise = (async () => {
           if (asset.kind === "image") {
             const img = new Image();
             img.src = asset.url!;
             await img.decode();
-            if (!this.disposed && this.urls.get(c.id) === asset.url) {
+            if (!this.disposed && !controller.signal.aborted && this.urls.get(c.id) === asset.url) {
               this.sources.set(c.id, img);
               this.revision++;
             }
@@ -164,17 +183,25 @@ export class MediaPool {
             if (el instanceof HTMLVideoElement) el.playsInline = true;
             this.elements.set(c.id, el);
             el.addEventListener("seeked", () => {
-              this.revision++;
+              if (this.elements.get(c.id) === el) this.revision++;
             });
-            const loaded = ready(el, "loadeddata");
+            const loaded = ready(el, "loadeddata", 20000, controller.signal);
             el.src = asset.url!;
             await loaded;
-            if (this.disposed) return;
+            if (this.disposed || this.elements.get(c.id) !== el || this.urls.get(c.id) !== asset.url) return;
             if (el instanceof HTMLVideoElement) this.sources.set(c.id, el);
             this.revision++;
             this.connect(c.id, el);
           }
-        })();
+        })().catch((error) => {
+          // Removing/replacing a source is expected while editing. Failed current
+          // sources must clear their URL so a later ensure can retry them.
+          if (controller.signal.aborted || this.disposed) return;
+          if (this.controllers.get(c.id) === controller) this.remove(c.id);
+          throw error;
+        }).finally(() => {
+          if (this.controllers.get(c.id) === controller) this.pending.delete(c.id);
+        });
         this.pending.set(c.id, promise);
         return promise;
       }),
@@ -183,15 +210,20 @@ export class MediaPool {
   private connect(id: string, el: HTMLMediaElement) {
     if (!this.context || this.nodes.has(id)) return;
     const node = this.context.createMediaElementSource(el),
-      gain = this.context.createGain();
+      gain = this.context.createGain(),
+      pan = this.context.createStereoPanner();
     gain.gain.value = 0;
     node.connect(gain);
-    gain.connect(this.destination ?? this.context.destination);
+    gain.connect(pan);
+    pan.connect(this.destination ?? this.context.destination);
     this.nodes.set(id, node);
     this.gains.set(id, gain);
+    this.pans.set(id, pan);
     el.muted = false;
   }
   async enableAudio(exporting = false) {
+    if (this.disposed) return;
+    this.exporting = exporting;
     if (!this.context) {
       this.context = new AudioContext();
       if (exporting)
@@ -199,6 +231,29 @@ export class MediaPool {
       for (const [id, el] of this.elements) this.connect(id, el);
     }
     if (this.context.state === "suspended") await this.context.resume();
+  }
+  /** Position every source at its first used frame before real-time recording. */
+  async prepareExport(project: Project) {
+    await Promise.all(project.clips.map(async (clip) => {
+      const el = this.elements.get(clip.id);
+      if (!el) return;
+      const window = transitionWindow(project, clip);
+      const firstTime = Math.max(0, window?.start ?? clip.start);
+      const asset = project.assets.find((a) => a.id === clip.assetId);
+      const at = clamp(clip.frozenAt ?? clip.sourceStart + (firstTime - clip.start) * clip.speed, 0,
+        Math.max(0, (asset?.duration ?? el.duration) - 0.002));
+      if (Math.abs(el.currentTime - at) <= 0.008) return;
+      const seek = ready(el, "seeked", 10000, this.controllers.get(clip.id)?.signal);
+      el.currentTime = at;
+      await seek;
+    }));
+  }
+  private setAudioValue(parameter: AudioParam, value: number, smooth: boolean) {
+    if (smooth && this.context) parameter.setTargetAtTime(value, this.context.currentTime, 0.004);
+    else {
+      if (this.context) parameter.cancelScheduledValues(this.context.currentTime);
+      parameter.value = value;
+    }
   }
   sync(project: Project, time: number, playing: boolean) {
     const seeks: Promise<void>[] = [];
@@ -238,7 +293,7 @@ export class MediaPool {
       if (!active && !inTransition) {
         el.pause();
         const gain = this.gains.get(c.id);
-        if (gain) gain.gain.value = 0;
+        if (gain) this.setAudioValue(gain.gain, 0, false);
         continue;
       }
       const sourceTime = clamp(
@@ -251,7 +306,9 @@ export class MediaPool {
         Math.abs(el.currentTime - sourceTime) > (playing ? 0.18 : 0.008) &&
         !el.seeking
       ) {
-        const seek = ready(el, "seeked", 10000);
+        const seek = ready(el, "seeked", 10000, this.controllers.get(c.id)?.signal).catch((error) => {
+          if ((error as Error).name !== "AbortError") throw error;
+        });
         el.currentTime = sourceTime;
         seeks.push(seek);
       }
@@ -264,25 +321,37 @@ export class MediaPool {
       );
       const transitionGain = incomingMix !== null ? incomingMix : outgoingMix !== null ? 1 - outgoingMix : 1;
       const gain = this.gains.get(c.id);
-      if (gain)
-        gain.gain.value =
+      if (gain) {
+        const volume =
           (active || inTransition) && c.frozenAt === undefined &&
           !project.mutedTracks.includes(trackKey(c)) &&
           !project.hiddenTracks.includes(trackKey(c))
             ? animated.volume * fade * transitionGain
             : 0;
-      if (playing && (active || inTransition) && c.frozenAt === undefined && el.paused)
-        void el.play().catch(() => {
-          /* Subsequent user playback can resume a blocked media element. */
+        this.setAudioValue(gain.gain, Number.isFinite(volume) ? clamp(volume, 0, 3) : 0, playing);
+      }
+      const pan = this.pans.get(c.id);
+      if (pan) this.setAudioValue(pan.pan, clamp(Number(animated.audioPan) || 0, -1, 1), playing);
+      const exhausted = el.ended && sourceTime >= Math.max(0, el.duration - 0.01);
+      if (playing && (active || inTransition) && c.frozenAt === undefined && el.paused && !exhausted) {
+        const playback = el.play().catch((error) => {
+          if (this.exporting && !this.disposed && this.elements.get(c.id) === el)
+            throw new Error(`Could not play “${asset?.name ?? c.label}” during export: ${(error as Error).message}`);
+          /* Subsequent user playback can resume a blocked preview element. */
         });
+        if (this.exporting) seeks.push(playback);
+      }
       if (!playing || (!active && !inTransition) || c.frozenAt !== undefined) el.pause();
     }
     return Promise.all(seeks);
   }
   pause() {
     for (const el of this.elements.values()) el.pause();
+    for (const gain of this.gains.values()) this.setAudioValue(gain.gain, 0, false);
   }
   private remove(id: string) {
+    this.controllers.get(id)?.abort();
+    this.controllers.delete(id);
     const el = this.elements.get(id);
     if (el) {
       el.pause();
@@ -291,8 +360,10 @@ export class MediaPool {
     }
     this.nodes.get(id)?.disconnect();
     this.gains.get(id)?.disconnect();
+    this.pans.get(id)?.disconnect();
     this.nodes.delete(id);
     this.gains.delete(id);
+    this.pans.delete(id);
     this.elements.delete(id);
     this.sources.delete(id);
     this.revision++;
@@ -302,7 +373,9 @@ export class MediaPool {
   dispose() {
     this.disposed = true;
     for (const id of [...this.urls.keys()]) this.remove(id);
-    if (this.context) void this.context.close();
+    if (this.context && this.context.state !== "closed") void this.context.close().catch(() => {});
+    this.context = null;
+    this.destination = null;
   }
 }
 
@@ -344,6 +417,12 @@ export async function exportProject(
     if (signal.aborted)
       throw new DOMException("Export cancelled", "AbortError");
   };
+  check();
+  if (!Number.isFinite(options.resolution) || options.resolution < 144 || options.resolution > 4320 ||
+      !Number.isFinite(options.fps) || options.fps < 1 || options.fps > 120)
+    throw new Error("Choose a supported resolution and frame rate before exporting.");
+  if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported(options.mime))
+    throw new Error("This video format is unavailable. Choose one of the supported export formats.");
   const duration = projectDuration(project);
   const missing = project.clips
     .map((c) => project.assets.find((a) => a.id === c.assetId))
@@ -366,27 +445,27 @@ export async function exportProject(
   let recorder: MediaRecorder | null = null,
     stream: MediaStream | null = null;
   let frame = 0;
+  let rejectAbort: (error: DOMException) => void = () => {};
+  const aborted = () => rejectAbort(new DOMException("Export cancelled", "AbortError"));
   const abortPromise = new Promise<never>((_, reject) => {
-    if (signal.aborted)
-      reject(new DOMException("Export cancelled", "AbortError"));
-    else
-      signal.addEventListener(
-        "abort",
-        () => reject(new DOMException("Export cancelled", "AbortError")),
-        { once: true },
-      );
+    rejectAbort = reject;
+    signal.addEventListener("abort", aborted, { once: true });
   });
   // Handle cancellation even during loading, and keep all recorders and tracks scoped to this export.
   try {
     onProgress(0, "Preparing media");
     await Promise.race([pool.ensure(project), abortPromise]);
     check();
-    await document.fonts.ready;
-    await pool.enableAudio(true);
+    await Promise.race([document.fonts.ready, abortPromise]);
+    await Promise.race([pool.prepareExport(project), abortPromise]);
+    await Promise.race([pool.enableAudio(true), abortPromise]);
     await Promise.race([pool.sync(project, 0, false), abortPromise]);
     check();
     renderer.draw(canvas, project, 0, pool.sources);
+    // Request explicit captures at the chosen frame rate, including unchanged
+    // still-image/text frames that automatic canvas capture may omit.
     stream = canvas.captureStream(options.fps);
+    const videoTrack = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
     for (const track of pool.destination?.stream.getAudioTracks() ?? [])
       stream.addTrack(track);
     recorder = new MediaRecorder(stream, {
@@ -410,28 +489,23 @@ export async function exportProject(
     });
     recorder.start(250);
     const started = performance.now();
+    let capturedFrame = -1;
     const render = new Promise<void>((resolve, reject) => {
       const tick = () => {
-        if (signal.aborted) {
-          reject(new DOMException("Export cancelled", "AbortError"));
-          return;
-        }
-        const elapsed = Math.min(
-          duration,
-          (performance.now() - started) / 1000,
-        );
-        void pool
-          .sync(project, Math.min(elapsed, duration - 0.001), true)
-          .catch(reject);
-        renderer.draw(
-          canvas,
-          project,
-          Math.min(elapsed, duration - 0.001),
-          pool.sources,
-        );
-        onProgress(elapsed / duration, "Rendering your video");
-        if (elapsed >= duration) resolve();
-        else frame = requestAnimationFrame(tick);
+        try {
+          check();
+          const elapsed = Math.min(duration, (performance.now() - started) / 1000);
+          void pool.sync(project, Math.min(elapsed, duration - 0.001), true).catch(reject);
+          const frameIndex = Math.min(Math.ceil(duration * options.fps) - 1, Math.floor(elapsed * options.fps));
+          if (frameIndex !== capturedFrame) {
+            renderer.draw(canvas, project, Math.min(elapsed, duration - 0.001), pool.sources);
+            videoTrack.requestFrame?.();
+            capturedFrame = frameIndex;
+          }
+          onProgress(elapsed / duration, "Rendering your video");
+          if (elapsed >= duration) resolve();
+          else frame = requestAnimationFrame(tick);
+        } catch (error) { reject(error); }
       };
       tick();
     });
@@ -443,20 +517,31 @@ export async function exportProject(
       abortPromise,
     ]);
     pool.pause();
+    onProgress(1, "Finishing video");
     recorder.stop();
-    await stopped;
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([stopped, abortPromise, new Promise<never>((_, reject) => {
+        flushTimer = setTimeout(() => reject(new Error("The encoder could not finish the video. Try a lower resolution or another format.")), 30000);
+      })]);
+    } finally { clearTimeout(flushTimer); }
     check();
     const blob = new Blob(chunks, { type: options.mime });
     if (!blob.size)
       throw new Error(
-        "The encoder produced an empty video. Try another format.",
+        duration < 1 ? "The encoder could not finish this very short video. Extend the edit to at least 2 seconds and retry."
+          : "The encoder produced an empty video. Try another format.",
       );
     onProgress(1, "Video ready");
     return blob;
   } finally {
+    signal.removeEventListener("abort", aborted);
     cancelAnimationFrame(frame);
     pool.dispose();
-    if (recorder && recorder.state !== "inactive") recorder.stop();
+    renderer.dispose();
+    if (recorder && recorder.state !== "inactive") {
+      try { recorder.stop(); } catch { /* Preserve the original cancellation or encoder failure. */ }
+    }
     stream?.getTracks().forEach((track) => track.stop());
   }
 }

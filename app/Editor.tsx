@@ -58,6 +58,7 @@ import {
   projectDuration,
   setJoinTransition,
   splitItem,
+  toggleTimelineMarker,
   transitionSource,
   uid,
   type Asset,
@@ -78,6 +79,7 @@ import { listProjects, type PersistedProject } from "./editorStorage";
 import { decodeClipAudio, wordsToCaptions, type WhisperChunk } from "./editor/whisper";
 import WhisperWorker from "./editor/whisper.worker?worker";
 import { textAnimationTiming } from "./editor/textAnimation";
+import { detachClipAudio, isTrackLocked, removeSelection, selectionItems } from "./editor/timelineOperations";
 const NAV = [
   { name: "Media", icon: Film },
   { name: "Audio", icon: Music2 },
@@ -281,45 +283,20 @@ export default function Editor() {
   }, [notify]);
   const remove = useCallback((target: Selection = selection) => {
     if (!target) return;
-    if (target.id === selection?.id && selected.length > 1) {
-      const ids = new Set(selected.map((s) => s.id));
-      edit((p) => ({ ...p, clips: p.clips.filter((c) => !ids.has(c.id)), texts: p.texts.filter((t) => !ids.has(t.id)) }));
-      select(null);
-      notify(`${ids.size} clips deleted.`);
-      return;
-    }
-    const item =
-      target.kind === "clip"
-        ? project.clips.find((c) => c.id === target.id)
-        : project.texts.find((t) => t.id === target.id);
-    if (!item) return;
-    const length = endOf(item) - item.start;
-    edit((p) => {
-      const same = (c: Clip | TextClip) => c.track === item.track;
-      return {
-        ...p,
-        clips: p.clips
-          .filter((c) => c.id !== item.id)
-          .map((c) =>
-            ripple && same(c) && c.start >= endOf(item) - 0.001
-              ? { ...c, start: c.start - length }
-              : c,
-          ),
-        texts: p.texts
-          .filter((t) => t.id !== item.id)
-          .map((t) =>
-            ripple && same(t) && t.start >= endOf(item) - 0.001
-              ? { ...t, start: t.start - length }
-              : t,
-          ),
-      };
-    });
-    if (selection?.id === target.id) select(null);
-  }, [selection, selected, project, edit, ripple, select, notify]);
+    const targets = target.id === selection?.id && selected.length > 1 ? selected : [target];
+    const items = selectionItems(project, targets);
+    const locked = items.filter((item) => isTrackLocked(project, item.track));
+    const next = removeSelection(project, targets, ripple);
+    if (next === project) { notify("Unlock the layer to edit this clip."); return; }
+    edit(() => next);
+    selectMany(locked.map((item) => ({ kind: "assetId" in item ? "clip" : "text", id: item.id })));
+    if (locked.length) notify(`${items.length - locked.length} clips deleted. Locked clips were kept.`);
+  }, [selection, selected, project, edit, ripple, selectMany, notify]);
   const duplicate = useCallback(
     (atPlayhead = false, copied?: Clip | TextClip) => {
       const item = copied ?? selectedClip ?? selectedText;
       if (!item) return;
+      if (isTrackLocked(project, item.track)) { notify("Unlock the layer to paste or duplicate here."); return; }
       const clone = {
         ...structuredClone(item),
         id: uid("assetId" in item ? "clip" : "text"),
@@ -334,9 +311,11 @@ export default function Editor() {
       }
       seek(clone.start);
     },
-    [selectedClip, selectedText, time, edit, seek],
+    [selectedClip, selectedText, project, time, edit, seek, select, notify],
   );
   const split = useCallback((target: Selection = selection) => {
+    const item = target && [...project.clips, ...project.texts].find((value) => value.id === target.id);
+    if (item && isTrackLocked(project, item.track)) { notify("Unlock the layer to split this clip."); return; }
     const result = splitItem(project, target, time);
     if (result.project === project) {
       notify("Place the playhead inside the selected clip to split it.");
@@ -344,8 +323,10 @@ export default function Editor() {
     }
     edit(() => result.project);
     select(result.selection);
-  }, [project, selection, time, edit, notify]);
+  }, [project, selection, time, edit, select, notify]);
   const freeze = useCallback((target: Selection) => {
+    const item = target && project.clips.find((value) => value.id === target.id);
+    if (item && isTrackLocked(project, item.track)) { notify("Unlock the layer to freeze this clip."); return; }
     const result = freezeFrame(project, target, time);
     if (result.project === project) {
       notify("Place the playhead inside a video clip to freeze its frame.");
@@ -355,7 +336,18 @@ export default function Editor() {
     select(result.selection);
     seek(time);
     notify("2-second freeze frame added. Drag its edge to change the length.");
-  }, [project, time, edit, seek, notify]);
+  }, [project, time, edit, select, seek, notify]);
+  const detachAudio = useCallback((clip: Clip) => {
+    const result = detachClipAudio(project, clip.id);
+    if (result.project === project) {
+      notify(isTrackLocked(project, clip.track) ? "Unlock the layer to detach audio." : "Select a video clip with audio to detach.");
+      return;
+    }
+    edit(() => result.project);
+    select(result.selection);
+    seek(clip.start);
+    notify("Audio detached to its own clip. The video's audio is muted.");
+  }, [project, edit, select, seek, notify]);
   const copy = useCallback((item: Clip | TextClip) => {
     clipboard.current = structuredClone(item);
     setClipboardProjectId(project.id);
@@ -379,8 +371,9 @@ export default function Editor() {
       }
       if (
         (e.target instanceof Element && e.target.closest(
-          'input, textarea, select, [contenteditable="true"], [role="menu"]',
+          'input, textarea, select, [contenteditable="true"], [role="menu"], dialog[open]',
         )) ||
+        document.querySelector('dialog[open], [role="dialog"]') ||
         dialog ||
         busy
       )
@@ -415,6 +408,9 @@ export default function Editor() {
       } else if (mod && e.key.toLowerCase() === "i") {
         e.preventDefault();
         files.current?.click();
+      } else if (!mod && !e.altKey && e.key.toLowerCase() === "m") {
+        e.preventDefault();
+        if (!e.repeat) edit((p) => toggleTimelineMarker(p, time, e.shiftKey ? "moment" : "beat"));
       } else if (e.code === "Space") {
         e.preventDefault();
         if (time >= duration) setTime(0);
@@ -448,9 +444,11 @@ export default function Editor() {
     duplicate,
     remove,
     seek,
+    select,
     time,
     duration,
     project.fps,
+    edit,
     selectedClip,
     selectedText,
     copy,
@@ -492,8 +490,8 @@ export default function Editor() {
   function addAsset(asset: Asset) {
     const kind = asset.kind === "audio" ? "audio" : "video",
       track =
-        project.clips.find((c) => c.kind === kind)?.track ??
-        (kind === "audio" ? 0 : 1),
+        project.clips.find((c) => c.kind === kind && !isTrackLocked(project, c.track))?.track ??
+        (isTrackLocked(project, kind === "audio" ? 0 : 1) ? project.layerCount : kind === "audio" ? 0 : 1),
       start = Math.max(
         0,
         ...[...project.clips, ...project.texts]
@@ -506,7 +504,7 @@ export default function Editor() {
     seek(start);
   }
   function addText(preset = TEXT_PRESETS[0]) {
-    const track = Math.max(
+    let track = Math.max(
       0,
       ...[...project.clips, ...project.texts]
         .filter(
@@ -514,6 +512,7 @@ export default function Editor() {
         )
         .map((c) => c.track + 1),
     );
+    while (isTrackLocked(project, track)) track++;
     const text = makeText(time, {
       text: preset.sample,
       track,
@@ -528,6 +527,7 @@ export default function Editor() {
       addText(preset);
       return;
     }
+    if (isTrackLocked(project, selectedText.track)) { notify("Unlock the layer to edit this text."); return; }
     const defaults = makeText(selectedText.start);
     edit((p) => ({
       ...p,
@@ -557,6 +557,7 @@ export default function Editor() {
       notify("Select a video clip on the timeline first.");
       return;
     }
+    if (isTrackLocked(project, selectedClip.track)) { notify("Unlock the layer to edit this clip."); return; }
     edit((p) => ({
       ...p,
       clips: p.clips.map((c) =>
@@ -570,6 +571,7 @@ export default function Editor() {
       notify("Place two visual clips together on the same layer, then drop the transition on their join.");
       return;
     }
+    if (isTrackLocked(project, incoming.track)) { notify("Unlock the layer to change its transition."); return; }
     edit((p) => setJoinTransition(p, incoming.id, name));
     select({ kind: "clip", id: incoming.id });
     seek(incoming.start + Math.min(0.15, incoming.transitionDuration / 2));
@@ -1097,6 +1099,7 @@ export default function Editor() {
                             );
                             return;
                           }
+                          if (isTrackLocked(project, target.track)) { notify("Unlock the layer to change effects."); return; }
                           const effects = active
                             ? (target.effects ?? []).filter(
                                 (e) => e.name !== effect.name,
@@ -1311,6 +1314,7 @@ export default function Editor() {
           else if (action === "paste" && hasClipboard && clipboard.current) duplicate(true, clipboard.current);
           else if (action === "split") split(target);
           else if (action === "freeze") freeze(target);
+          else if (action === "detach-audio" && "assetId" in item) detachAudio(item);
           else if (action === "duplicate") duplicate(false, item);
           else if (action === "delete") remove(target);
         }}
@@ -1661,6 +1665,7 @@ export default function Editor() {
                 ["← / →", "Move one frame"],
                 ["Shift ← / →", "Move ten frames"],
                 ["Delete", "Delete selected clip"],
+                ["M / Shift M", "Mark beat / important moment"],
                 ["Alt + drag", "Ignore snapping"],
                 ["Esc during drag", "Cancel the move"],
                 ["Ctrl I", "Import media"],
@@ -1675,8 +1680,8 @@ export default function Editor() {
             <p className="honest-note">
               Media stays local. Browser storage is separate from the PC app;
               use a .cutline backup to transfer projects. Export is real-time.
-              Motion tracking and advanced masking aren’t
-              included.
+              Use masks to shape or reveal a clip. Lock layers to protect edits,
+              detach audio from a video, and snap clips to beat or moment markers.
             </p>
           </div>
         </Dialog>

@@ -40,6 +40,9 @@ import { historyReducer } from "../app/editor/useProject";
 import { FULL_CROP } from "../app/editor/crop";
 import { decodeClipAudio } from "../app/editor/whisper";
 import { waveformColumns, waveformFromBuffer } from "../app/editor/waveform";
+import { runAudioReliabilityChecks } from "./audio-reliability";
+import { runVisualCompositingTests } from "./visual-compositing-engine";
+import { runMaskUiChecks } from "./mask-ui-engine";
 import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "../app/editor/codexTypes";
 
 const assert = (condition: unknown, message: string) => {
@@ -1347,6 +1350,9 @@ export async function runEngineTests() {
       assert(cancelled && (await loadProject()).project?.texts.length === 1, "Cancelled request modified timeline");
     } finally { root.unmount(); host.remove(); delete window.cutlineDesktop; }
   });
+  await runVisualCompositingTests(check, assert);
+  await runMaskUiChecks(check);
+  await runAudioReliabilityChecks(check);
   return { passed, failures, details };
 }
 (

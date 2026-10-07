@@ -1,4 +1,5 @@
 import { normalizeCrop } from "./crop";
+import { BLEND_MODES, MASK_SHAPES, normalizeCompositing } from "./visualCompositing";
 import {
   clipDuration, COMBO_ANIMATIONS, endOf, freezeFrame, makeClip, makeText, normalizeGradientStops,
   projectDuration, roundFrame, setJoinTransition, setPropertyKeyframe, splitItem, transitionSource,
@@ -30,6 +31,15 @@ const sharedFields: Record<string, Schema> = {
   snapToGuides: boolean,
   rotation: number(-3600, 3600, "Degrees."),
   opacity: number(0, 1), animationDuration: seconds, exitAnimationDuration: seconds,
+  maskShape: choices(MASK_SHAPES), maskSpace: choices(["content", "canvas"]),
+  maskX: number(-2, 3, "Fraction of the chosen reference width; 0.5 centers the mask."),
+  maskY: number(-2, 3, "Fraction of the chosen reference height; 0.5 centers the mask."),
+  maskWidth: number(0.01, 3, "Fraction of reference width."), maskHeight: number(0.01, 3, "Fraction of reference height; Mirror uses this as band thickness."),
+  maskRotation: number(-3600, 3600, "Additional degrees relative to the reference."),
+  maskFeather: number(0, 0.5, "Softness as a fraction of the reference's shorter dimension."),
+  maskInvert: boolean, blendMode: choices(BLEND_MODES),
+  chromaKey: boolean, chromaColor: color,
+  chromaTolerance: number(0, 1), chromaSoftness: number(0, 1), chromaSpill: number(0, 1),
 };
 const textFields: Record<string, Schema> = {
   ...sharedFields, text: string("Visible text; use newline characters for multiple lines.", 20000),
@@ -51,7 +61,7 @@ const clipFields: Record<string, Schema> = {
   ...sharedFields,
   x: number(-2, 2, "Offset from canvas center as a fraction of canvas width; 0 is centered."),
   y: number(-2, 2, "Offset from canvas center as a fraction of canvas height; 0 is centered."),
-  scale: number(0.01, 10), speed: number(0.1, 8), volume: number(0, 3),
+  scale: number(0.01, 10), speed: number(0.1, 8), volume: number(0, 3), audioPan: number(-1, 1, "Stereo balance: -1 left, 0 centered, 1 right."),
   fadeIn: seconds, fadeOut: seconds, flipX: boolean, flipY: boolean,
   fit: choices(["cover", "contain"]), brightness: number(0, 200), contrast: number(0, 200),
   crop: object({ x: number(0, 0.99), y: number(0, 0.99), width: number(0.01, 1), height: number(0.01, 1) }, ["x", "y", "width", "height"]),
@@ -72,7 +82,7 @@ const operation = (op: string, properties: Record<string, Schema>, required: str
   object({ op: { const: op }, ...properties }, ["op", ...required]);
 const operationSchemas = [
   operation("project", { patch: object(projectFields) }, ["patch"]),
-  operation("layer", { track, muted: boolean, hidden: boolean }, ["track"]),
+  operation("layer", { track, muted: boolean, hidden: boolean, locked: { ...boolean, description: "Protect or unlock this layer. Unlock only when the user explicitly requests it; never unlock automatically to bypass edit protection." } }, ["track"]),
   operation("add_text", { ...textFields, ref: string(), preset: choices(TEXT_PRESETS.map((p) => p.name)), patch: object(textFields) }, ["text", "start", "duration", "track"]),
   operation("add_clip", { ...clipFields, ref: string(), assetId: string(), sourceStart: seconds, sourceEnd: seconds, patch: object(clipFields) }, ["assetId", "start", "track"]),
   operation("update", { ...clipFields, ...textFields, id, patch: object({ ...clipFields, ...textFields }) }, ["id"]),
@@ -139,8 +149,8 @@ export function projectSnapshot(project: Project) {
     projectId: project.id, revision: projectRevision(project), name: project.name,
     ratio: project.ratio, fps: project.fps, background: project.background,
     duration: projectDuration(project), layerCount: project.layerCount,
-    mutedTracks: project.mutedTracks, hiddenTracks: project.hiddenTracks,
-    assets: project.assets.map(({ id, name, kind, duration, width, height }) => ({ id, name, kind, duration, width, height })),
+    mutedTracks: project.mutedTracks, hiddenTracks: project.hiddenTracks, lockedTracks: project.lockedTracks ?? [],
+    assets: project.assets.map(({ id, name, kind, duration, width, height, audioPeak }) => ({ id, name, kind, duration, width, height, audioPeak })),
     clips: project.clips.map((clip) => ({ ...clip, duration: clipDuration(clip), end: endOf(clip) })),
     texts: project.texts.map((text) => ({ ...text, end: endOf(text) })),
     markers: project.markers,
@@ -148,11 +158,12 @@ export function projectSnapshot(project: Project) {
 }
 export function editingCatalog(fonts = FONTS) {
   return {
-    units: { time: "Seconds on the timeline, aligned to project frames.", markers: "The get_project snapshot includes markers [{kind:'beat'|'moment', time: seconds}]. These are user-placed timing guides.", tracks: "0-based universal layers; higher tracks are in front. Video, text and audio may share any layer.", textPosition: "x/y are fractions of canvas dimensions; 0.5/0.5 centers text.", clipPosition: "x/y are offsets from canvas center; 0/0 centers media.", opacity: "0–1", fontSize: "Pixels at 1920px canvas width", color: "#RRGGBB" },
+    locking: "Respect lockedTracks from get_project. Item edits, additions, removals and moves into locked layers reject atomically. Never unlock a layer just to complete another edit; only use layer locked:false when the user explicitly requests unlocking.",
+    units: { time: "Seconds on the timeline, aligned to project frames.", markers: "The get_project snapshot includes markers [{kind:'beat'|'moment', time: seconds}]. These are user-placed timing guides.", tracks: "0-based universal layers; higher tracks are in front. Video, text and audio may share any layer. lockedTracks lists protected layer:N keys.", textPosition: "x/y are fractions of canvas dimensions; 0.5/0.5 centers text.", clipPosition: "x/y are offsets from canvas center; 0/0 centers media.", mask: "maskSpace content (default) follows the item's rendered bounds, rotation, scale, animation and flips; canvas uses the output frame. maskX/Y .5/.5 centers; maskWidth/Height are reference fractions; maskRotation adds degrees; maskFeather is a fraction of the shorter reference dimension. Linear reveals below its rotated center; Mirror reveals a band of maskHeight.", chroma: "Chroma key compares original media colors before grading/effects. chromaTolerance and chromaSoftness are normalized RGB distance; chromaSpill suppresses key color in partially transparent edges.", audioPan: "-1 left, 0 center, 1 right.", opacity: "0–1", fontSize: "Pixels at 1920px canvas width", color: "#RRGGBB" },
     rules: ["Use get_project immediately before apply_edits.", "Existing project markers identify user-marked song beats and important moments; preserve and use their kind and time as timing guides when planning edits and animations.", "Use exact IDs, or @ref for creations earlier in a batch.", "For add_text, add_clip and update, styling properties can be placed directly on the operation. A nested patch is also accepted; direct properties win.", "All operations in a batch commit together and undo together.", "A transition attaches to an incoming visual clip touching a preceding clip on the same track. Duration is at most 3 seconds and cannot exceed either clip length.", "Freeze inserts a held frame inside a video and shifts subsequent items on that layer by its duration.", "Overlapping visuals on the same track use the later-starting clip; use different tracks for overlays.", "Gradient stops can be keyframed with gradientStop:STOP_ID:color or gradientStop:STOP_ID:position.", "Only already imported assets can be inserted. Ask the user to import missing media.", "No shell commands, source-code edits, downloads, or filesystem access are needed to edit the video."],
     examples: [{ op: "add_text", ref: "title", text: "Hello", start: 0, duration: 3, track: 1, x: 0.5, y: 0.5, fontSize: 96, color: "#ffffff" }, { op: "animation", id: "@title", phase: "Entrance", duration: 0.6, layers: [{ name: "Letter Pop In" }] }, { op: "update", id: "EXACT_ITEM_ID", opacity: 0.75 }],
     textPresets: TEXT_PRESETS.map((preset) => preset.name), animations: ANIMATIONS,
-    comboAnimations: COMBO_ANIMATIONS, effects: EFFECTS.map((effect) => effect.name),
+    comboAnimations: COMBO_ANIMATIONS, effects: EFFECTS.map((effect) => effect.name), masks: MASK_SHAPES, blendModes: BLEND_MODES,
     transitions: TRANSITIONS.map((transition) => transition.name), filters: FILTERS.map((filter) => filter.name),
     fonts, textProperties: textFields, clipProperties: clipFields,
   };
@@ -165,6 +176,9 @@ export function applyCodexEdits(project: Project, input: unknown) {
   let next = structuredClone(project);
   const aliases: Record<string, string> = Object.create(null);
   const changes: { operation: string; id?: string; ref?: string }[] = [];
+  const assertEditableLayer = (track: number) => {
+    if ((next.lockedTracks ?? []).includes(`layer:${track}`)) throw new Error(`Layer ${track + 1} is locked. Unlock it before editing.`);
+  };
   const properties = (op: Operation, fields: Record<string, Schema>) => ({ ...op.patch, ...Object.fromEntries(Object.keys(fields).filter((key) => Object.hasOwn(op, key)).map((key) => [key, op[key]])) });
   const locate = (raw: string) => {
     const key = raw.startsWith("@") ? aliases[raw.slice(1)] : raw;
@@ -173,12 +187,14 @@ export function applyCodexEdits(project: Project, input: unknown) {
     return item;
   };
   const replace = (item: Clip | TextClip) => {
+    Object.assign(item, normalizeCompositing(item));
     if ("sourceEnd" in item) next.clips = next.clips.map((clip) => clip.id === item.id ? item : clip);
     else next.texts = next.texts.map((text) => text.id === item.id ? item : text);
     next.layerCount = Math.max(next.layerCount, item.track + 1);
   };
   const checkClip = (clip: Clip) => {
     clip.crop = normalizeCrop(clip.crop);
+    Object.assign(clip, normalizeCompositing(clip));
     const asset = next.assets.find((value) => value.id === clip.assetId)!;
     if (clip.sourceEnd <= clip.sourceStart || (clip.sourceEnd - clip.sourceStart) / clip.speed < 1 / next.fps - 1e-8) throw new Error("A clip must contain at least one frame.");
     if (clip.frozenAt === undefined && asset.kind !== "image" && asset.kind !== "demo" && clip.sourceEnd > asset.duration + 1 / next.fps) throw new Error("The clip trim extends beyond its source media.");
@@ -191,18 +207,23 @@ export function applyCodexEdits(project: Project, input: unknown) {
         next = { ...next, ...op.patch } as Project;
       } else if (op.op === "layer") {
         const layer = "layer:" + op.track;
+        if (op.locked !== false && (op.muted !== undefined || op.hidden !== undefined)) assertEditableLayer(op.track as number);
+        if (op.locked !== undefined) next.lockedTracks = [...(next.lockedTracks ?? []).filter((value) => value !== layer), ...(op.locked ? [layer] : [])];
         next.layerCount = Math.max(next.layerCount, (op.track as number) + 1);
         if (op.muted !== undefined) next.mutedTracks = [...next.mutedTracks.filter((value) => value !== layer), ...(op.muted ? [layer] : [])];
         if (op.hidden !== undefined) next.hiddenTracks = [...next.hiddenTracks.filter((value) => value !== layer), ...(op.hidden ? [layer] : [])];
       } else if (op.op === "add_text") {
+        assertEditableLayer(op.track as number);
         const preset = TEXT_PRESETS.find((value) => value.name === op.preset);
         const item = makeText(roundFrame(op.start as number, next.fps), {
           ...preset?.style, ...properties(op, textFields), start: roundFrame(op.start as number, next.fps), text: op.text as string, track: op.track as number,
           duration: Math.max(1 / next.fps, roundFrame(op.duration as number, next.fps)),
         });
         item.gradientStops = normalizeGradientStops(item.gradientStops);
+        Object.assign(item, normalizeCompositing(item));
         next.texts.push(item); next.layerCount = Math.max(next.layerCount, item.track + 1); resultId = item.id;
       } else if (op.op === "add_clip") {
+        assertEditableLayer(op.track as number);
         const asset = next.assets.find((value) => value.id === op.assetId);
         if (!asset) throw new Error("Import this media first; asset ID was not found.");
         const patch = properties(op, clipFields);
@@ -213,11 +234,13 @@ export function applyCodexEdits(project: Project, input: unknown) {
         checkClip(item); next.clips.push(item); next.layerCount = Math.max(next.layerCount, item.track + 1); resultId = item.id;
       } else {
         const item = locate(op.id!); resultId = item.id;
+        assertEditableLayer(item.track);
         if (op.op === "update") {
           const patch = properties(op, { ...clipFields, ...textFields });
           validate(patch, object("sourceEnd" in item ? clipFields : textFields), "patch");
           if (!Object.keys(patch).length) throw new Error("Provide at least one property to update.");
           const updated = { ...item, ...patch } as typeof item;
+          assertEditableLayer(updated.track);
           if (patch.fit) (updated as Clip).fitExplicit = true;
           updated.start = roundFrame(updated.start, next.fps);
           if ("sourceEnd" in updated) checkClip(updated);
@@ -233,6 +256,7 @@ export function applyCodexEdits(project: Project, input: unknown) {
           const result = splitItem(next, { id: item.id, kind: "sourceEnd" in item ? "clip" : "text" }, at);
           next = result.project; resultId = result.selection?.id;
         } else if (op.op === "duplicate") {
+          assertEditableLayer((op.track ?? item.track) as number);
           const duplicated = { ...structuredClone(item), id: uid("sourceEnd" in item ? "clip" : "text"), start: roundFrame(op.start as number, next.fps), track: (op.track ?? item.track) as number };
           if ("sourceEnd" in duplicated) next.clips.push(duplicated); else next.texts.push(duplicated);
           next.layerCount = Math.max(next.layerCount, duplicated.track + 1); resultId = duplicated.id;

@@ -1,4 +1,5 @@
 import { FULL_CROP, normalizeCrop, type SourceCrop } from "./crop";
+import { DEFAULT_COMPOSITING, normalizeCompositing, type VisualCompositing } from "./visualCompositing";
 export type MediaKind = "video" | "image" | "audio" | "demo";
 export type Ratio = "16:9" | "9:16" | "1:1" | "4:5";
 export type EffectName =
@@ -118,6 +119,8 @@ export type Asset = {
   thumbnail?: string;
   waveform?: number[];
   waveformPeaks?: number[];
+  /** Absolute decoded sample peak used for non-destructive gain normalization. */
+  audioPeak?: number;
   width?: number;
   height?: number;
   sizeLabel: string;
@@ -153,7 +156,7 @@ export function normalizeGradientStops(value: unknown): GradientStop[] {
   }).sort((a, b) => a.position - b.position);
   return stops.length >= 2 ? stops : DEFAULT_GRADIENT_STOPS.map((stop) => ({ ...stop }));
 }
-export type Clip = {
+export type Clip = VisualCompositing & {
   id: string;
   assetId: string;
   label: string;
@@ -166,6 +169,8 @@ export type Clip = {
   frozenAt?: number;
   speed: number;
   volume: number;
+  /** Stereo balance: -1 is left, 0 is centered, 1 is right. */
+  audioPan?: number;
   fadeIn: number;
   fadeOut: number;
   x: number;
@@ -204,7 +209,7 @@ export type Clip = {
   keyframes: Keyframe[];
   propertyKeyframes?: PropertyKeyframes;
 };
-export type TextClip = {
+export type TextClip = VisualCompositing & {
   id: string;
   text: string;
   label: string;
@@ -273,6 +278,8 @@ export type Project = {
   markers: TimelineMarker[];
   mutedTracks: string[];
   hiddenTracks: string[];
+  /** Protected layers remain visible/playable but reject editing until unlocked. */
+  lockedTracks: string[];
 };
 export type Selection = { kind: "clip" | "text"; id: string } | null;
 export const FPS = 30;
@@ -357,6 +364,7 @@ export function insertLayer(p: Project, at: number): Project {
     texts: p.texts.map(shift),
     hiddenTracks: flags(p.hiddenTracks),
     mutedTracks: flags(p.mutedTracks),
+    lockedTracks: flags(p.lockedTracks ?? []),
   };
 }
 export function moveToLayer(
@@ -397,6 +405,7 @@ export const dimensions = (ratio: Ratio, resolution = 1080) => {
 };
 export function makeClip(asset: Asset, start = 0, track = 0): Clip {
   return {
+    ...DEFAULT_COMPOSITING,
     id: uid("clip"),
     assetId: asset.id,
     label: asset.name,
@@ -407,6 +416,7 @@ export function makeClip(asset: Asset, start = 0, track = 0): Clip {
     sourceEnd: asset.duration,
     speed: 1,
     volume: 1,
+    audioPan: 0,
     fadeIn: 0,
     fadeOut: 0,
     x: 0,
@@ -438,6 +448,7 @@ export function makeClip(asset: Asset, start = 0, track = 0): Clip {
 }
 export function makeText(start = 0, patch: Partial<TextClip> = {}): TextClip {
   return {
+    ...DEFAULT_COMPOSITING,
     id: uid("text"),
     text: "New Text",
     label: "Text",
@@ -500,6 +511,7 @@ export function newProject(): Project {
     markers: [],
     mutedTracks: [],
     hiddenTracks: [],
+    lockedTracks: [],
   };
 }
 export function toggleTimelineMarker(project: Project, time: number, kind: TimelineMarker["kind"]): Project {
@@ -856,7 +868,8 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
       return [];
     }
     const c = { ...makeClip(asset), ...old } as Clip;
-    c.kind = asset.kind === "audio" ? "audio" : "video";
+    // A detached audio lane intentionally references the original video asset.
+    c.kind = asset.kind === "audio" || (asset.kind === "video" && old.kind === "audio") ? "audio" : "video";
     if (r.version !== 2 && r.version !== 3) {
       c.x /= 100;
       c.y /= 100;
@@ -875,6 +888,8 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
       Number(c.sourceEnd) || asset.duration,
     );
     c.effects = Array.isArray(c.effects) ? c.effects : [];
+    Object.assign(c, normalizeCompositing(c));
+    c.audioPan = typeof c.audioPan === "number" && Number.isFinite(c.audioPan) ? clamp(c.audioPan, -1, 1) : 0;
     c.comboAnimations = normalizeComboAnimations(c.comboAnimations);
     c.keyframes = Array.isArray(c.keyframes) ? c.keyframes : [];
     c.propertyKeyframes = c.propertyKeyframes && typeof c.propertyKeyframes === "object" ? c.propertyKeyframes : {};
@@ -900,6 +915,7 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
       t.duration = Math.max(MIN_DURATION, t.duration);
       t.track = Math.floor(clamp(Number(t.track), 0, 9999));
       t.effects = Array.isArray(t.effects) ? t.effects : [];
+      Object.assign(t, normalizeCompositing(t));
       t.comboAnimations = normalizeComboAnimations(t.comboAnimations);
       t.fillMode = t.fillMode === "linear" || t.fillMode === "radial" ? t.fillMode : "solid";
       t.gradientAngle = clamp(Number(t.gradientAngle), 0, 360);
@@ -922,6 +938,9 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
   let hiddenTracks: string[] = Array.isArray(r.hiddenTracks)
     ? r.hiddenTracks.filter((k) => typeof k === "string")
     : [];
+  let lockedTracks: string[] = Array.isArray(r.lockedTracks)
+    ? r.lockedTracks.filter((k) => typeof k === "string")
+    : [];
   let count = Math.max(
     2,
     Math.floor(clamp(Number(r.layerCount) || 4, 2, 10000)),
@@ -934,7 +953,7 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
       `${"assetId" in c ? c.kind : "text"}:${c.track}`;
     const keys = [
       ...new Set(
-        [...clips, ...texts].map(oldKey).concat(mutedTracks, hiddenTracks),
+        [...clips, ...texts].map(oldKey).concat(mutedTracks, hiddenTracks, lockedTracks),
       ),
     ]
       .filter((k) => /^(audio|video|text):\d+$/.test(k))
@@ -954,6 +973,7 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
       flags.filter((k) => mapping.has(k)).map((k) => `layer:${mapping.get(k)}`);
     mutedTracks = remap(mutedTracks);
     hiddenTracks = remap(hiddenTracks);
+    lockedTracks = remap(lockedTracks);
     count = Math.max(4, keys.length + 2);
   }
   return {
@@ -971,6 +991,7 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
     layerCount: count,
     mutedTracks,
     hiddenTracks,
+    lockedTracks: [...new Set(lockedTracks)].filter((key) => /^layer:\d+$/.test(key) && Number(key.split(":")[1]) < count),
     markers: (Array.isArray(r.markers) ? r.markers : []).flatMap((marker: Record<string, unknown>) => {
       if (!marker || typeof marker !== "object" || (marker.kind !== "beat" && marker.kind !== "moment") || typeof marker.time !== "number" || !Number.isFinite(marker.time)) return [];
       return [{ id: typeof marker.id === "string" && marker.id ? marker.id : uid("marker"), kind: marker.kind, time: roundFrame(Math.max(0, marker.time), Number(r.fps) === 60 ? 60 : 30) } as TimelineMarker];

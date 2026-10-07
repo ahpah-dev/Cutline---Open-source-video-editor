@@ -187,7 +187,8 @@ export function useProject(onError: (message: string) => void) {
   useEffect(() => {
     if (!ready) return;
     for (const asset of state.project.assets) {
-      if (asset.kind !== "audio" || (asset.waveformPeaks?.length ?? 0) >= 1024 || queuedWaveforms.current.has(asset.id)) continue;
+      const needsAudio = asset.kind === "audio" || state.project.clips.some((clip) => clip.assetId === asset.id && clip.kind === "audio");
+      if (!needsAudio || (asset.waveformPeaks?.length ?? 0) >= 1024 || queuedWaveforms.current.has(asset.id)) continue;
       const blob = blobs.current.get(asset.id)?.blob;
       if (!blob) continue;
       queuedWaveforms.current.add(asset.id);
@@ -196,7 +197,7 @@ export function useProject(onError: (message: string) => void) {
         if (data) dispatch({ type: "waveform", id: asset.id, data });
       }).catch(() => {});
     }
-  }, [ready, state.project.assets]);
+  }, [ready, state.project.assets, state.project.clips]);
   useEffect(() => {
     if (!ready || state.origin) return;
     let active = true;

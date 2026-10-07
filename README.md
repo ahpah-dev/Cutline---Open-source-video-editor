@@ -1,6 +1,20 @@
-# Cutline 0.4.4
+# Cutline 0.5.0
 
 A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files stay local; the optional assistant receives project metadata and preview frames it requests.
+
+## Masks and compositing
+
+New in 0.5.0: select a video, image, or text layer and open **Mask**. Choose Rectangle, Ellipse, Linear, Mirror, Heart, or Star. Adjust its position, size, rotation, feather, and inversion; use **Edit mask** above the player to drag its center, size, or rotation handles. Hold Shift while rotating to snap to 15° increments. Layer-relative masks follow the layer's transform and animation; canvas-relative masks stay fixed in the output frame. Diamonds keyframe each setting, and Reset clears the mask and its keyframes. Mask drags commit as one undo step; Escape cancels. Masks are non-destructive and remain consistent through transitions, splitting, project backups, preview and export.
+
+**Basic → Compositing → Blend mode** combines the selected layer with lower layers (Multiply, Screen, Overlay, Difference, and more). **Mask → Chroma key** removes a chosen green/blue-screen or other color with adjustable tolerance, edge softness, and spill suppression. Chroma key uses original media colors before grading; it is not automatic subject recognition or object tracking. All compositing settings are available to the optional Codex assistant in exact, validated units.
+
+## Timeline and audio improvements
+
+New in 0.5.0: lock any timeline layer to protect it from pointer, keyboard, inspector, preset, and AI edits. Unlock it with its padlock button to edit again. Clip menus now include **Detach audio**, preserving source trims, speed, volume, stereo pan, fades, and automation while muting the original video in one undoable edit. Selected groups can align their start or end to the playhead without changing relative offsets. With Snap enabled, dragging and trimming also snap to beat/moment markers; **M** marks a beat, **Shift+M** a moment, and Delete removes a focused marker.
+
+The Audio inspector now includes keyframeable stereo pan and **Normalize peak · −1 dBFS**. Peak normalization measures the imported source and is capped at 200% gain; it is not LUFS loudness matching. Audio waveforms preserve short transients and detached audio uses its source video's waveform when decoding is supported. Media loads are cancelled when removed/replaced, failed loads can retry, export preparation and encoder finalization are cancellable, playback failures are reported, and GPU surfaces are explicitly released when a preview/export is disposed.
+
+![Editable masks in the Windows interface](docs/screenshots/masking.png)
 
 ## Crop video and images
 
@@ -19,7 +33,7 @@ New in 0.4.2: video, image and text clips magnetically snap their visible center
 3. If prompted, click **Sign in to Codex** and finish the normal browser sign-in. No API key, npm, terminal commands or configuration files are needed.
 4. Describe your edit in the panel. For example: “Make a 15-second vertical edit using the imported clips. Add a centered gradient title with Letter Pop In, a slow zoom, and smooth dissolves between the cuts.” Select clips manually when you want to target them. Enter sends; Shift+Enter adds a new line.
 
-Codex works directly on the open timeline. Its editing tools expose exact item IDs, frame-aligned seconds, imported assets, installed fonts, preset names, text styling/gradients, clip transforms/color/audio, animation stacks, Combo loops, effects, genuine two-sided transitions, splits, freeze frames, duplication/deletion, layer mute/hide, and property keyframes. It can inspect rendered preview frames and open the regular export settings. Import and final save location remain under your control.
+Codex works directly on the open timeline. Its editing tools expose exact item IDs, frame-aligned seconds, imported assets, installed fonts, preset names, text styling/gradients, clip transforms/color/audio, masks, chroma key, blend modes, stereo pan, animation stacks, Combo loops, effects, genuine two-sided transitions, splits, freeze frames, duplication/deletion, layer mute/hide/lock, and property keyframes. It can inspect rendered preview frames and open the regular export settings. Import and final save location remain under your control.
 
 Each validated batch commits together and undoes in one step. A project/revision check refuses stale edits after manual changes; pending tool calls are cancelled on Stop or Disconnect, and requests for a different open project are rejected. You can keep editing manually, close the panel to return to the inspector, switch models from the account's available list, or start a new chat. Chats are session-only, while timeline edits are autosaved normally. AI can make mistakes: review the result and use Undo or make a backup before a large edit.
 
@@ -49,7 +63,9 @@ Imported stills fit inside the canvas by default; existing stills using the form
 
 ## Limits
 
-This is not a complete CapCut replacement. Tracking, advanced masking, optical-flow retiming, proxy editing, and GPU/offline render pipelines are not included. Auto subtitles require a first-time model download and may need correction, especially with noisy or overlapping speech. Export is real-time using Canvas, Web Audio and MediaRecorder. Keep the window open and the computer awake. Long edits, 4K/60 fps and stacked effects can consume substantial memory or drop frames; 1080p/30 fps is the practical starting point. Backups larger than 1 GB are rejected. Source codec support depends on the browser/Electron build.
+Very short, silent static-image edits (under one second) can fail in the current real-time encoder. The error advises extending the edit to at least two seconds. A two-second static masked export is covered by the encoded-output check; sub-second video-only export is not certified.
+
+This is not a complete CapCut replacement. Automatic subject cutout/tracking, freehand or Bezier masks, optical-flow retiming, proxy editing, multicam, color scopes, audio time-stretch processing, and an offline render pipeline are not included. Auto subtitles require a first-time model download and may need correction, especially with noisy or overlapping speech. Export is real-time using Canvas, Web Audio and MediaRecorder. Keep the window open and the computer awake. Long edits, 4K/60 fps and stacked effects can consume substantial memory or drop frames; 1080p/30 fps is the practical starting point. Backups larger than 1 GB are rejected. Source codec support depends on the browser/Electron build.
 
 Web projects and PC projects use separate local storage. Transfer edits using a `.cutline` backup. Clearing browser/app data can remove local projects; keep backups of important work. Imported source files themselves are never modified.
 
@@ -72,10 +88,10 @@ npm run desktop:dist
 
 `desktop:dist` emits the Windows x64 installer and portable executable into `outputs/desktop`. Electron uses an isolated, sandboxed preload bridge; Node.js is not exposed to the UI.
 
-`test:unit` runs model/history, isolated React timeline, atomic Codex editing, and mocked app-server protocol tests. `test:engine` tests actual Canvas rendering, IndexedDB preservation, all available encoders, audio, cancellation, duplicate source playback, and the live Editor's Codex tool bridge in an isolated Electron profile. `npm test` also builds and checks the server-rendered shell. Tests never use the user's normal project profile. An optional production integration test, `CUTLINE_LIVE_CODEX=1 electron tests/codex-desktop-live.cjs`, uses the installed Codex sign-in and account usage for one synthetic edit, preview and undo; do not run it as a routine offline test.
+`test:unit` runs model/history, isolated React timeline, compositing/coordinate and atomic Codex editing tests, plus mocked app-server protocol tests. `test:engine` tests actual Canvas rendering, mask controls and keyframe drags, blend/transition endpoints, feather boundaries, chroma key, IndexedDB preservation, all available encoders, masked encoded output, stereo audio, cancellation, duplicate source playback, and the live Editor's Codex tool bridge in an isolated Electron profile. `npm test` also builds and checks the server-rendered shell. Tests never use the user's normal project profile. An optional production integration test, `CUTLINE_LIVE_CODEX=1 electron tests/codex-desktop-live.cjs`, uses the installed Codex sign-in and account usage for one synthetic edit, preview and undo; do not run it as a routine offline test.
 
 ## Verification for this release
 
-The model/component/protocol and rendering/export suites cover atomic AI batches, exact IDs, stale revisions, invalid operations, preview frames, undo/redo and persistence, plus the existing animation/effect/transition/audio/export features. A real production Windows run reused Codex sign-in, edited an isolated timeline with a requested title, checked a rendered preview, and undid the edit. The automatic official runtime download was checksum-verified; only the main executable and required tool host are retained. Runtime-version gating, paginated model discovery, removed-model rejection and empty catalogs have automated coverage. Type checking and the server-rendered shell are checked during release packaging.
+The 0.5.0 model/component/protocol and rendering/export suites cover masks, chroma key, blended transition endpoints, keyframed canvas drags, locks, detached-audio persistence, stereo pan, peak normalization, and source-load cleanup, alongside the existing atomic AI batches, exact IDs, stale revisions, invalid operations, preview frames, undo/redo and persistence. Actual encoded MP4/WebM and a masked encoded export are decoded and checked. Type checking, scoped lint, the server-rendered shell, packaged startup, and hidden Windows layout checks are part of release verification. Earlier releases' production Windows runs verified Codex sign-in, an isolated timeline edit, rendered preview and undo, plus the checksum-verified official runtime download. Live account-consuming AI inference is not routinely repeated for UI/rendering updates.
 
 An isolated Windows production run completed Whisper transcription with CDN requests deliberately blocked and a fresh model download. Isolated Electron screenshots and pointer selection were checked with synthetic media. Timeline component tests simulate pointer events and verify exact clip state/position; they are not a substitute for broad human/device testing. 4K/60 fps and long-project performance are not certified.

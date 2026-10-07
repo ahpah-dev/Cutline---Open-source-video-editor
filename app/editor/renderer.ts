@@ -15,6 +15,10 @@ import {
 import { FILTERS } from "./presets";
 import { letterPopProgress, textMotion } from "./textAnimation";
 import { normalizeCrop } from "./crop";
+import {
+  canvasBlendMode, chromaColorRgb, drawMaskPath, keyChromaPixels, maskGeometry,
+  normalizeCompositing, type BlendMode, type MaskFrame, type VisualCompositing,
+} from "./visualCompositing";
 
 export type MediaSources = Map<string, HTMLVideoElement | HTMLImageElement>;
 export type Bounds = {
@@ -25,6 +29,8 @@ export type Bounds = {
   width: number;
   height: number;
   rotation: number;
+  flipX?: boolean;
+  flipY?: boolean;
 };
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
 const surface = () => document.createElement("canvas");
@@ -35,8 +41,24 @@ const sourceSize = (source: HTMLVideoElement | HTMLImageElement | undefined, ass
 export class Renderer {
   private layer = surface();
   private transitionLayer = surface();
+  private transitionBackdrop = surface();
+  private transitionSide = surface();
+  private transitionCoverage = surface();
   private temp = surface();
   private pixel = surface();
+  private maskSurface = surface();
+  private maskBlurSurface = surface();
+  private maskSignature = "";
+  private chromaSource = surface();
+  private chromaSurface = surface();
+  private chromaFallback = surface();
+  private chromaAttempted = false;
+  private chromaState: {
+    gl: WebGLRenderingContext; program: WebGLProgram; texture: WebGLTexture;
+    buffer: WebGLBuffer; position: number;
+    key: WebGLUniformLocation; tolerance: WebGLUniformLocation;
+    softness: WebGLUniformLocation; spill: WebGLUniformLocation;
+  } | null = null;
   private wavySurface = surface();
   private wavyFallbackSurface = surface();
   private wavyAttempted = false;
@@ -51,6 +73,20 @@ export class Renderer {
     phase: WebGLUniformLocation;
   } | null = null;
   bounds: Bounds[] = [];
+
+  /** Release GPU objects and raster backing stores when a player/export session closes. */
+  dispose() {
+    for (const state of [this.chromaState, this.wavyState]) {
+      if (!state) continue;
+      state.gl.deleteTexture(state.texture); state.gl.deleteBuffer(state.buffer); state.gl.deleteProgram(state.program);
+      state.gl.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+    this.chromaState = null; this.wavyState = null;
+    this.chromaAttempted = false; this.wavyAttempted = false; this.maskSignature = ""; this.bounds = [];
+    for (const canvas of [this.layer, this.transitionLayer, this.transitionBackdrop, this.transitionSide, this.transitionCoverage,
+      this.temp, this.pixel, this.maskSurface, this.maskBlurSurface, this.chromaSource, this.chromaSurface, this.chromaFallback,
+      this.wavySurface, this.wavyFallbackSurface]) { canvas.width = 0; canvas.height = 0; }
+  }
 
   draw(
     canvas: HTMLCanvasElement,
@@ -109,8 +145,14 @@ export class Renderer {
         textContext.clearRect(0, 0, w, h);
         const animated = animatedItem(active, time);
         this.drawText(textContext, animated, time, w, h);
-        this.applyEffects(animated.effects ?? [], time, w, h, this.bounds.at(-1));
-        ctx.drawImage(this.layer, 0, 0);
+        const bounds = this.bounds.at(-1);
+        if (animated.chromaKey) {
+          const keyed = this.renderChroma(this.layer, normalizeCompositing(animated), w, h);
+          textContext.clearRect(0, 0, w, h); textContext.drawImage(keyed, 0, 0);
+        }
+        this.applyEffects(animated.effects ?? [], time, w, h, bounds);
+        this.applyMask(animated, bounds ?? { x: w / 2, y: h / 2, width: w, height: h, rotation: 0 }, w, h);
+        this.composite(ctx, this.layer, animated.blendMode);
         continue;
       }
       const join = joins.find(({ incoming, window }) => incoming.id === active.id && time >= window.start && time < window.end);
@@ -118,25 +160,40 @@ export class Renderer {
         const pair = this.transitionLayer.getContext("2d")!;
         const progress = clamp((time - join.window.start) / join.window.duration, 0, 1);
         pair.clearRect(0, 0, w, h);
+        const compositingTransition = [join.window.previous, active].some((clip) => canvasBlendMode(animatedItem(clip, time).blendMode) !== "source-over");
         if (active.transition === "Fade black" || active.transition === "Fade white") {
           pair.fillStyle = active.transition === "Fade black" ? "#000" : "#fff";
           pair.fillRect(0, 0, w, h);
         }
+        if (compositingTransition) {
+          for (const surface of [this.transitionBackdrop, this.transitionSide, this.transitionCoverage]) {
+            if (surface.width !== w || surface.height !== h) { surface.width = w; surface.height = h; }
+          }
+          const backdrop = this.transitionBackdrop.getContext("2d")!;
+          backdrop.clearRect(0, 0, w, h); backdrop.drawImage(canvas, 0, 0);
+        }
         for (const [clip, side] of [[join.window.previous, "out"], [active, "in"]] as const) {
           this.drawClip(project.assets.find((a) => a.id === clip.assetId), clip, time, sources.get(clip.id), w, h, true);
+          if (compositingTransition) {
+            this.blendedTransitionSide(pair, active.transition, progress, side, animatedItem(clip, time).blendMode, w, h);
+            continue;
+          }
           pair.save();
           this.transition(pair, active.transition, progress, side, w, h);
           pair.drawImage(this.layer, 0, 0);
           pair.restore();
         }
-        ctx.drawImage(this.transitionLayer, 0, 0);
+        this.composite(ctx, this.transitionLayer);
       } else {
         this.drawClip(project.assets.find((a) => a.id === active.assetId), active, time, sources.get(active.id), w, h);
-        ctx.drawImage(this.layer, 0, 0);
+        this.composite(ctx, this.layer, animatedItem(active, time).blendMode);
       }
-      const hitClip = join && time < active.start ? join.window.previous : active;
+      const hitClip = animatedItem(join && time < active.start ? join.window.previous : active, time);
       const tr = interpolatedTransform(hitClip, time - hitClip.start);
       const motion = this.clipMotion(hitClip, time, !!join);
+      const shake = (hitClip.effects.find((effect) => effect.name === "Shake")?.amount ?? 0) / 100;
+      const pulse = (hitClip.effects.find((effect) => effect.name === "Pulse")?.amount ?? 0) / 100;
+      const pulseScale = 1 + pulse * 0.05 * (1 + Math.sin(time * Math.PI * 3));
       const asset = project.assets.find((a) => a.id === hitClip.assetId);
       const size = sourceSize(sources.get(hitClip.id), asset);
       const crop = normalizeCrop(hitClip.crop);
@@ -147,14 +204,46 @@ export class Renderer {
       this.bounds.push({
         id: hitClip.id,
         kind: "clip",
-        x: w / 2 + (tr.x + motion.x) * w,
-        y: h / 2 + (tr.y + motion.y) * h,
-        width: contentWidth * tr.scale * motion.scaleX,
-        height: contentHeight * tr.scale * motion.scaleY,
+        x: w / 2 + (tr.x + motion.x) * w + Math.sin(time * 53) * w * 0.016 * shake,
+        y: h / 2 + (tr.y + motion.y) * h + Math.cos(time * 47) * h * 0.018 * shake,
+        width: Math.abs(contentWidth * tr.scale * pulseScale * motion.scaleX),
+        height: Math.abs(contentHeight * tr.scale * pulseScale * motion.scaleY),
         rotation: tr.rotation + motion.rotation,
+        flipX: hitClip.flipX !== (tr.scale * pulseScale * motion.scaleX < 0),
+        flipY: hitClip.flipY !== (tr.scale * pulseScale * motion.scaleY < 0),
       });
     }
     return this.bounds;
+  }
+
+  private composite(ctx: CanvasRenderingContext2D, layer: HTMLCanvasElement, mode?: BlendMode) {
+    ctx.save();
+    ctx.globalCompositeOperation = canvasBlendMode(mode);
+    ctx.drawImage(layer, 0, 0);
+    ctx.restore();
+  }
+
+  /** Resolve each side's blend against the same fixed backdrop before weighting the transition.
+   * Separate coverage keeps the backdrop stationary through slides, wipes and transparent masks. */
+  private blendedTransitionSide(pair: CanvasRenderingContext2D, name: string, p: number, side: "out" | "in", blendMode: BlendMode | undefined, w: number, h: number) {
+    const source = this.transitionSide.getContext("2d")!;
+    source.clearRect(0, 0, w, h);
+    source.save(); this.transition(source, name, p, side, w, h);
+    source.globalAlpha = 1; source.globalCompositeOperation = "source-over";
+    source.drawImage(this.layer, 0, 0); source.restore();
+    const coverage = this.transitionCoverage.getContext("2d")!;
+    coverage.clearRect(0, 0, w, h);
+    coverage.save(); this.transition(coverage, name, p, side, w, h);
+    coverage.globalCompositeOperation = "source-over"; coverage.fillStyle = "white";
+    coverage.fillRect(0, 0, w, h); coverage.restore();
+    // Effects have finished with the shared scratch canvas by this point.
+    const resolved = this.temp.getContext("2d")!;
+    resolved.clearRect(0, 0, w, h); resolved.drawImage(this.transitionBackdrop, 0, 0);
+    this.composite(resolved, this.transitionSide, blendMode);
+    resolved.save(); resolved.globalCompositeOperation = "destination-in"; resolved.drawImage(this.transitionCoverage, 0, 0); resolved.restore();
+    pair.save();
+    pair.globalCompositeOperation = name === "Fade black" || name === "Fade white" ? "source-over" : "lighter";
+    pair.drawImage(this.temp, 0, 0); pair.restore();
   }
 
   private transition(
@@ -260,6 +349,17 @@ export class Renderer {
     ctx.rotate(rad(tr.rotation + motion.rotation));
     const zoom =
       tr.scale * (1 + pulse * 0.05 * (1 + Math.sin(time * Math.PI * 3)));
+    const sourceDimensions = sourceSize(source, asset), sourceCrop = normalizeCrop(c.crop);
+    const contentFit = sourceDimensions.width && sourceDimensions.height
+      ? Math.min(w / (sourceDimensions.width * sourceCrop.width), h / (sourceDimensions.height * sourceCrop.height)) : 0;
+    const contentFrame: MaskFrame = {
+      x: w / 2 + (tr.x + motion.x) * w + Math.sin(time * 53) * w * 0.016 * shake,
+      y: h / 2 + (tr.y + motion.y) * h + Math.cos(time * 47) * h * 0.018 * shake,
+      width: Math.abs((c.fit === "contain" && contentFit ? sourceDimensions.width * sourceCrop.width * contentFit : w) * zoom * motion.scaleX),
+      height: Math.abs((c.fit === "contain" && contentFit ? sourceDimensions.height * sourceCrop.height * contentFit : h) * zoom * motion.scaleY),
+      rotation: tr.rotation + motion.rotation,
+      flipX: c.flipX !== (zoom * motion.scaleX < 0), flipY: c.flipY !== (zoom * motion.scaleY < 0),
+    };
     ctx.scale(zoom * motion.scaleX * (c.flipX ? -1 : 1), zoom * motion.scaleY * (c.flipY ? -1 : 1));
     ctx.translate(-w / 2, -h / 2);
     // Keep the visible crop inside the same frame used by selection handles.
@@ -286,8 +386,15 @@ export class Renderer {
     if (motion.characters < 1) {
       ctx.beginPath(); ctx.rect(0, 0, w * motion.characters, h); ctx.clip();
     }
+    const chroma = c.chromaKey ? normalizeCompositing(c) : null;
+    let mediaContext = ctx;
+    if (chroma) {
+      if (this.chromaSource.width !== w || this.chromaSource.height !== h) { this.chromaSource.width = w; this.chromaSource.height = h; }
+      mediaContext = this.chromaSource.getContext("2d")!;
+      mediaContext.clearRect(0, 0, w, h);
+    }
     if (asset.kind === "demo")
-      drawDemo(ctx, asset, w, h, (time - c.start) / clipDuration(c));
+      drawDemo(mediaContext, asset, w, h, (time - c.start) / clipDuration(c));
     else if (source) {
       const { width: originalWidth, height: originalHeight } = sourceSize(source, asset);
       const crop = normalizeCrop(c.crop);
@@ -297,7 +404,7 @@ export class Renderer {
           c.fit === "cover"
             ? Math.max(w / sw, h / sh)
             : Math.min(w / sw, h / sh);
-        ctx.drawImage(
+        mediaContext.drawImage(
           source,
           originalWidth * crop.x, originalHeight * crop.y, sw, sh,
           (w - sw * s) / 2,
@@ -307,6 +414,7 @@ export class Renderer {
         );
       }
     }
+    if (chroma) ctx.drawImage(this.renderChroma(this.chromaSource, chroma, w, h), 0, 0, w, h);
     ctx.restore();
     if (c.temperature) {
       ctx.save();
@@ -317,6 +425,112 @@ export class Renderer {
       ctx.restore();
     }
     this.applyEffects(c.effects, time, w, h);
+    this.applyMask(c, contentFrame, w, h);
+  }
+
+  private applyMask(item: VisualCompositing, frame: MaskFrame, w: number, h: number) {
+    if (!item.maskShape || item.maskShape === "None") return;
+    const geometry = maskGeometry(item, frame, w, h);
+    if (geometry.shape === "None") return;
+    const signature = JSON.stringify([w, h, geometry]);
+    // Blur outside the output frame as well, so the frame boundary never becomes a mask edge.
+    // Large soft masks use a smaller raster; the visible feather stays measured in output pixels.
+    const scale = geometry.feather > 0 ? Math.min(1, 256 / geometry.feather, 2048 / (Math.max(w, h) + geometry.feather * 6)) : 1;
+    const padding = geometry.feather > 0 ? Math.ceil(geometry.feather * scale * 3) : 0;
+    const width = Math.ceil(w * scale) + padding * 2, height = Math.ceil(h * scale) + padding * 2;
+    if (this.maskSurface.width !== width || this.maskSurface.height !== height) {
+      this.maskSurface.width = width;
+      this.maskSurface.height = height;
+      this.maskSignature = "";
+    }
+    const blurWidth = geometry.feather > 0 ? width : 0, blurHeight = geometry.feather > 0 ? height : 0;
+    if (this.maskBlurSurface.width !== blurWidth || this.maskBlurSurface.height !== blurHeight) {
+      this.maskBlurSurface.width = blurWidth; this.maskBlurSurface.height = blurHeight;
+    }
+    if (signature !== this.maskSignature) {
+      const mask = this.maskSurface.getContext("2d")!;
+      mask.clearRect(0, 0, width, height); mask.fillStyle = "white";
+      mask.save(); mask.translate(padding, padding); mask.scale(scale, scale);
+      drawMaskPath(mask, geometry, w, h); mask.restore();
+      if (geometry.feather > 0) {
+        const blur = this.maskBlurSurface.getContext("2d")!;
+        blur.clearRect(0, 0, width, height);
+        blur.save(); blur.filter = `blur(${geometry.feather * scale}px)`; blur.drawImage(this.maskSurface, 0, 0); blur.restore();
+        mask.clearRect(0, 0, width, height); mask.drawImage(this.maskBlurSurface, 0, 0);
+      }
+      this.maskSignature = signature;
+    }
+    const ctx = this.layer.getContext("2d")!;
+    ctx.save(); ctx.globalCompositeOperation = geometry.invert ? "destination-out" : "destination-in";
+    ctx.drawImage(this.maskSurface, padding, padding, w * scale, h * scale, 0, 0, w, h); ctx.restore();
+  }
+
+  /** Chroma is keyed on original colors before grading, transform, effects and masking. */
+  private renderChroma(source: HTMLCanvasElement, settings: Required<VisualCompositing>, w: number, h: number): HTMLCanvasElement {
+    if (!this.chromaState && !this.chromaAttempted) { this.chromaAttempted = true; this.chromaState = this.createChromaRenderer(); }
+    const state = this.chromaState;
+    if (state && !state.gl.isContextLost()) {
+      const { gl, program, texture, buffer, position, key, tolerance, softness, spill } = state;
+      if (this.chromaSurface.width !== w || this.chromaSurface.height !== h) { this.chromaSurface.width = w; this.chromaSurface.height = h; }
+      gl.viewport(0, 0, w, h); gl.useProgram(program);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer); gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      const rgb = chromaColorRgb(settings.chromaColor);
+      gl.uniform3f(key, rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+      gl.uniform1f(tolerance, settings.chromaTolerance); gl.uniform1f(softness, Math.max(0.00001, settings.chromaSoftness)); gl.uniform1f(spill, settings.chromaSpill);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      return this.chromaSurface;
+    }
+    if (this.chromaFallback.width !== w || this.chromaFallback.height !== h) { this.chromaFallback.width = w; this.chromaFallback.height = h; }
+    const ctx = this.chromaFallback.getContext("2d", { willReadFrequently: true })!;
+    ctx.clearRect(0, 0, w, h); ctx.drawImage(source, 0, 0);
+    const image = ctx.getImageData(0, 0, w, h); keyChromaPixels(image.data, settings); ctx.putImageData(image, 0, 0);
+    return this.chromaFallback;
+  }
+
+  private createChromaRenderer() {
+    const gl = this.chromaSurface.getContext("webgl", { alpha: true, antialias: false, preserveDrawingBuffer: true, premultipliedAlpha: false });
+    if (!gl) return null;
+    const compile = (kind: number, source: string) => {
+      const shader = gl.createShader(kind); if (!shader) return null;
+      gl.shaderSource(shader, source); gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) { gl.deleteShader(shader); return null; }
+      return shader;
+    };
+    const vertex = compile(gl.VERTEX_SHADER, "attribute vec2 a_position; varying vec2 v_uv; void main(){gl_Position=vec4(a_position,0.,1.);v_uv=a_position*.5+.5;}");
+    const fragment = compile(gl.FRAGMENT_SHADER, `
+      precision mediump float;
+      varying vec2 v_uv; uniform sampler2D u_source; uniform vec3 u_key;
+      uniform float u_tolerance; uniform float u_softness; uniform float u_spill;
+      void main() {
+        vec4 pixel = texture2D(u_source, v_uv);
+        float distance = length(pixel.rgb - u_key) / 1.7320508;
+        float alpha = smoothstep(u_tolerance, u_tolerance + u_softness, distance);
+        float top = max(u_key.r, max(u_key.g, u_key.b));
+        float bottom = min(u_key.r, min(u_key.g, u_key.b));
+        if(top - bottom > .125 && alpha > 0. && alpha < 1.) {
+          float strength = u_spill * (1. - alpha);
+          if(u_key.r >= u_key.g && u_key.r >= u_key.b) pixel.r -= max(0., pixel.r - max(pixel.g, pixel.b)) * strength;
+          else if(u_key.g >= u_key.b) pixel.g -= max(0., pixel.g - max(pixel.r, pixel.b)) * strength;
+          else pixel.b -= max(0., pixel.b - max(pixel.r, pixel.g)) * strength;
+        }
+        gl_FragColor = vec4(pixel.rgb, pixel.a * alpha);
+      }
+    `);
+    if (!vertex || !fragment) { if(vertex) gl.deleteShader(vertex); if(fragment) gl.deleteShader(fragment); return null; }
+    const program = gl.createProgram(); if (!program) return null;
+    gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
+    gl.deleteShader(vertex); gl.deleteShader(fragment);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) { gl.deleteProgram(program); return null; }
+    const buffer = gl.createBuffer(), texture = gl.createTexture();
+    if (!buffer || !texture) { gl.deleteProgram(program); if(buffer) gl.deleteBuffer(buffer); if(texture) gl.deleteTexture(texture); return null; }
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+    gl.bindTexture(gl.TEXTURE_2D, texture); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.useProgram(program); gl.uniform1i(gl.getUniformLocation(program, "u_source"), 0);
+    return { gl, program, buffer, texture, position: gl.getAttribLocation(program, "a_position"), key: gl.getUniformLocation(program, "u_key")!, tolerance: gl.getUniformLocation(program, "u_tolerance")!, softness: gl.getUniformLocation(program, "u_softness")!, spill: gl.getUniformLocation(program, "u_spill")! };
   }
 
   private applyEffects(
@@ -778,9 +992,11 @@ export class Renderer {
       kind: "text",
       x: x + centerOffset * sx * Math.cos(rad(rotation)),
       y: y + centerOffset * sx * Math.sin(rad(rotation)),
-      width: (tw + t.padding * unit * 2) * sx,
-      height: (th + t.padding * unit * 2) * sy,
+      width: Math.abs((tw + t.padding * unit * 2) * sx),
+      height: Math.abs((th + t.padding * unit * 2) * sy),
       rotation,
+      flipX: sx < 0,
+      flipY: sy < 0,
     });
   }
 }
