@@ -54,6 +54,7 @@ test("new projects start with an empty media library and timeline", () => {
   assert.deepEqual(p.assets, []);
   assert.deepEqual(p.clips, []);
   assert.deepEqual(p.texts, []);
+  assert.deepEqual(p.markers, []);
 });
 test("new still images fit inside the canvas while videos continue to fill it", () => {
   assert.equal(makeClip({ ...video, kind: "image", name: "Portrait.webp" }).fit, "contain");

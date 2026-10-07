@@ -1,5 +1,6 @@
 import { FULL_CROP, normalizeCrop, type SourceCrop } from "./crop";
 import { DEFAULT_COMPOSITING, normalizeCompositing, type VisualCompositing } from "./visualCompositing";
+import { GRADE_DEFAULTS, identityCurves, normalizeGrade, type ColorGrading } from "./colorGrading";
 export type MediaKind = "video" | "image" | "audio" | "demo";
 export type Ratio = "16:9" | "9:16" | "1:1" | "4:5";
 export type EffectName =
@@ -15,7 +16,28 @@ export type EffectName =
   | "Pulse"
   | "Letterbox"
   | "Prism"
-  | "Wavy";
+  | "Wavy"
+  | "Soft focus"
+  | "Directional blur"
+  | "Zoom blur"
+  | "Radial blur"
+  | "Tilt shift"
+  | "Light leak"
+  | "Film dust"
+  | "Film scratches"
+  | "Flicker"
+  | "Strobe"
+  | "Posterize"
+  | "Negative"
+  | "Solarize"
+  | "Halftone"
+  | "Edge glow"
+  | "Sketch"
+  | "Fisheye"
+  | "Swirl"
+  | "Ripple"
+  | "Kaleidoscope"
+  | "Mirror";
 export type TransitionName =
   | "None"
   | "Dissolve"
@@ -24,11 +46,43 @@ export type TransitionName =
   | "Wipe left"
   | "Wipe right"
   | "Wipe up"
+  | "Wipe down"
+  | "Diagonal top left"
+  | "Diagonal top right"
+  | "Diagonal bottom left"
+  | "Diagonal bottom right"
   | "Slide left"
   | "Slide right"
+  | "Slide up"
+  | "Slide down"
+  | "Push up left"
+  | "Push up right"
   | "Zoom"
+  | "Zoom out"
+  | "Cross zoom"
+  | "Spin clockwise"
+  | "Spin counterclockwise"
+  | "Flip horizontal"
+  | "Flip vertical"
+  | "Whip left"
+  | "Whip right"
+  | "Whip up"
+  | "Whip down"
   | "Blur"
   | "Circle"
+  | "Iris close"
+  | "Diamond"
+  | "Heart"
+  | "Star"
+  | "Clock clockwise"
+  | "Clock counterclockwise"
+  | "Split horizontal"
+  | "Split vertical"
+  | "Blinds horizontal"
+  | "Blinds vertical"
+  | "Checkerboard"
+  | "Diagonal stripes"
+  | "Shutter"
   | "Glitch";
 export type AnimationName =
   | "None"
@@ -156,7 +210,7 @@ export function normalizeGradientStops(value: unknown): GradientStop[] {
   }).sort((a, b) => a.position - b.position);
   return stops.length >= 2 ? stops : DEFAULT_GRADIENT_STOPS.map((stop) => ({ ...stop }));
 }
-export type Clip = VisualCompositing & {
+export type Clip = VisualCompositing & ColorGrading & {
   id: string;
   assetId: string;
   label: string;
@@ -439,6 +493,9 @@ export function makeClip(asset: Asset, start = 0, track = 0): Clip {
     contrast: 100,
     saturation: 100,
     temperature: 0,
+    ...GRADE_DEFAULTS,
+    gradingEnabled: true,
+    colorCurves: identityCurves(),
     transition: "None",
     transitionDuration: 0.6,
     effects: [],
@@ -889,6 +946,7 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
     );
     c.effects = Array.isArray(c.effects) ? c.effects : [];
     Object.assign(c, normalizeCompositing(c));
+    Object.assign(c, normalizeGrade(c));
     c.audioPan = typeof c.audioPan === "number" && Number.isFinite(c.audioPan) ? clamp(c.audioPan, -1, 1) : 0;
     c.comboAnimations = normalizeComboAnimations(c.comboAnimations);
     c.keyframes = Array.isArray(c.keyframes) ? c.keyframes : [];

@@ -15,6 +15,9 @@ import {
 import { FILTERS } from "./presets";
 import { letterPopProgress, textMotion } from "./textAnimation";
 import { normalizeCrop } from "./crop";
+import { applyExpandedEffect } from "./expandedEffects";
+import { applyTransition } from "./transitions";
+import { ColorGradeRenderer, hasAdvancedGrade } from "./colorGrading";
 import {
   canvasBlendMode, chromaColorRgb, drawMaskPath, keyChromaPixels, maskGeometry,
   normalizeCompositing, type BlendMode, type MaskFrame, type VisualCompositing,
@@ -39,11 +42,13 @@ const sourceSize = (source: HTMLVideoElement | HTMLImageElement | undefined, ass
   height: source instanceof HTMLVideoElement ? source.videoHeight : source?.naturalHeight || asset?.height || 0,
 });
 export class Renderer {
+  private gradeRenderer = new ColorGradeRenderer();
   private layer = surface();
   private transitionLayer = surface();
   private transitionBackdrop = surface();
   private transitionSide = surface();
   private transitionCoverage = surface();
+  private transitionMatte = surface();
   private temp = surface();
   private pixel = surface();
   private maskSurface = surface();
@@ -76,6 +81,7 @@ export class Renderer {
 
   /** Release GPU objects and raster backing stores when a player/export session closes. */
   dispose() {
+    this.gradeRenderer.dispose();
     for (const state of [this.chromaState, this.wavyState]) {
       if (!state) continue;
       state.gl.deleteTexture(state.texture); state.gl.deleteBuffer(state.buffer); state.gl.deleteProgram(state.program);
@@ -83,7 +89,7 @@ export class Renderer {
     }
     this.chromaState = null; this.wavyState = null;
     this.chromaAttempted = false; this.wavyAttempted = false; this.maskSignature = ""; this.bounds = [];
-    for (const canvas of [this.layer, this.transitionLayer, this.transitionBackdrop, this.transitionSide, this.transitionCoverage,
+    for (const canvas of [this.layer, this.transitionLayer, this.transitionBackdrop, this.transitionSide, this.transitionCoverage, this.transitionMatte,
       this.temp, this.pixel, this.maskSurface, this.maskBlurSurface, this.chromaSource, this.chromaSurface, this.chromaFallback,
       this.wavySurface, this.wavyFallbackSurface]) { canvas.width = 0; canvas.height = 0; }
   }
@@ -161,9 +167,13 @@ export class Renderer {
         const progress = clamp((time - join.window.start) / join.window.duration, 0, 1);
         pair.clearRect(0, 0, w, h);
         const compositingTransition = [join.window.previous, active].some((clip) => canvasBlendMode(animatedItem(clip, time).blendMode) !== "source-over");
-        if (active.transition === "Fade black" || active.transition === "Fade white") {
-          pair.fillStyle = active.transition === "Fade black" ? "#000" : "#fff";
-          pair.fillRect(0, 0, w, h);
+        const dip = active.transition === "Fade black" || active.transition === "Fade white";
+        let matte: CanvasRenderingContext2D | null = null;
+        if (dip) {
+          if (this.transitionMatte.width !== w || this.transitionMatte.height !== h) { this.transitionMatte.width = w; this.transitionMatte.height = h; }
+          matte = this.transitionMatte.getContext("2d")!;
+          matte.clearRect(0, 0, w, h);
+          matte.globalCompositeOperation = "source-over";
         }
         if (compositingTransition) {
           for (const surface of [this.transitionBackdrop, this.transitionSide, this.transitionCoverage]) {
@@ -174,6 +184,9 @@ export class Renderer {
         }
         for (const [clip, side] of [[join.window.previous, "out"], [active, "in"]] as const) {
           this.drawClip(project.assets.find((a) => a.id === clip.assetId), clip, time, sources.get(clip.id), w, h, true);
+          // The dip belongs to this pair of clips, never to transparent regions over
+          // unrelated lower tracks. Source-over builds the rendered alpha union.
+          matte?.drawImage(this.layer, 0, 0);
           if (compositingTransition) {
             this.blendedTransitionSide(pair, active.transition, progress, side, animatedItem(clip, time).blendMode, w, h);
             continue;
@@ -182,6 +195,19 @@ export class Renderer {
           this.transition(pair, active.transition, progress, side, w, h);
           pair.drawImage(this.layer, 0, 0);
           pair.restore();
+        }
+        if (matte) {
+          matte.save();
+          matte.globalCompositeOperation = "source-in";
+          matte.fillStyle = active.transition === "Fade black" ? "#000" : "#fff";
+          matte.fillRect(0, 0, w, h);
+          matte.restore();
+          const phase = progress < .5 ? 1 - progress * 2 : progress * 2 - 1;
+          const dipWeight = 1 - phase * phase * (3 - 2 * phase);
+          // Complementary premultiplied weights retain full opacity for opaque
+          // shots and no matte at either endpoint, including semi-transparent clips.
+          pair.save(); pair.globalCompositeOperation = "lighter"; pair.globalAlpha = dipWeight;
+          pair.drawImage(this.transitionMatte, 0, 0); pair.restore();
         }
         this.composite(ctx, this.transitionLayer);
       } else {
@@ -233,7 +259,14 @@ export class Renderer {
     source.drawImage(this.layer, 0, 0); source.restore();
     const coverage = this.transitionCoverage.getContext("2d")!;
     coverage.clearRect(0, 0, w, h);
-    coverage.save(); this.transition(coverage, name, p, side, w, h);
+    coverage.save();
+    if (["Dissolve", "Zoom", "Zoom out", "Cross zoom", "Spin clockwise", "Spin counterclockwise", "Blur", "Glitch"].includes(name)) {
+      // Crossfade weights partition the entire fixed backdrop. Transform/filter
+      // alpha is already in transitionSide; multiplying by it again would darken
+      // soft or rotated edges only when a non-Normal blend mode is present.
+      const e = p * p * (3 - 2 * p);
+      coverage.globalAlpha = side === "out" ? 1 - e : e;
+    } else this.transition(coverage, name, p, side, w, h);
     coverage.globalCompositeOperation = "source-over"; coverage.fillStyle = "white";
     coverage.fillRect(0, 0, w, h); coverage.restore();
     // Effects have finished with the shared scratch canvas by this point.
@@ -254,64 +287,7 @@ export class Renderer {
     w: number,
     h: number,
   ) {
-    const ease = p * p * (3 - 2 * p);
-    switch (name) {
-      case "Dissolve":
-        ctx.globalAlpha = side === "out" ? 1 - ease : ease;
-        ctx.globalCompositeOperation = "lighter";
-        break;
-      case "Fade black":
-      case "Fade white":
-        ctx.globalAlpha = side === "out" ? Math.max(0, 1 - p * 2) : Math.max(0, p * 2 - 1);
-        break;
-      case "Wipe left":
-        ctx.beginPath();
-        ctx.rect(side === "in" ? w * (1 - ease) : 0, 0, w * (side === "in" ? ease : 1 - ease), h);
-        ctx.clip();
-        break;
-      case "Wipe right":
-        ctx.beginPath();
-        ctx.rect(side === "in" ? 0 : w * ease, 0, w * (side === "in" ? ease : 1 - ease), h);
-        ctx.clip();
-        break;
-      case "Wipe up":
-        ctx.beginPath();
-        ctx.rect(0, side === "in" ? h * (1 - ease) : 0, w, h * (side === "in" ? ease : 1 - ease));
-        ctx.clip();
-        break;
-      case "Slide left":
-        ctx.translate(side === "out" ? -ease * w : (1 - ease) * w, 0);
-        break;
-      case "Slide right":
-        ctx.translate(side === "out" ? ease * w : -(1 - ease) * w, 0);
-        break;
-      case "Zoom": {
-        const s = side === "out" ? 1 + ease * 0.18 : 0.65 + ease * 0.35;
-        ctx.globalAlpha = side === "out" ? 1 - ease : ease;
-        ctx.globalCompositeOperation = "lighter";
-        ctx.translate(w / 2, h / 2);
-        ctx.scale(s, s);
-        ctx.translate(-w / 2, -h / 2);
-        break;
-      }
-      case "Blur":
-        ctx.globalAlpha = side === "out" ? 1 - ease : ease;
-        ctx.globalCompositeOperation = "lighter";
-        ctx.filter = "blur(" + ((side === "out" ? p : 1 - p) * w) / 70 + "px)";
-        break;
-      case "Circle":
-        ctx.beginPath();
-        if (side === "out") ctx.rect(0, 0, w, h);
-        ctx.arc(w / 2, h / 2, (Math.hypot(w, h) / 2) * ease, 0, Math.PI * 2);
-        ctx.clip(side === "out" ? "evenodd" : "nonzero");
-        break;
-      case "Glitch":
-        ctx.globalAlpha = side === "out" ? 1 - ease : ease;
-        ctx.globalCompositeOperation = "lighter";
-        ctx.translate(Math.sin(p * 90) * w * 0.04 * (side === "out" ? -p : 1 - p), 0);
-        ctx.filter = "hue-rotate(" + Math.sin(p * 30) * 90 * (side === "out" ? p : 1 - p) + "deg)";
-        break;
-    }
+    applyTransition(ctx, name, p, side, w, h);
   }
 
   private clipMotion(c: Clip, time: number, supportFrame: boolean) {
@@ -366,11 +342,10 @@ export class Renderer {
     ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip();
     ctx.globalAlpha = clamp(tr.opacity * motion.opacity, 0, 1);
     ctx.filter = [
-      FILTERS.find((f) => f.name === c.filter)?.css,
-      "brightness(" + c.brightness + "%)",
-      "contrast(" + c.contrast + "%)",
-      "saturate(" + c.saturation + "%)",
-      amount("Blur") ? "blur(" + (amount("Blur") * w) / 55 + "px)" : "",
+      c.gradingEnabled !== false ? FILTERS.find((f) => f.name === c.filter)?.css : "",
+      "brightness(" + (c.gradingEnabled !== false ? c.brightness : 100) + "%)",
+      "contrast(" + (c.gradingEnabled !== false ? c.contrast : 100) + "%)",
+      "saturate(" + (c.gradingEnabled !== false ? c.saturation : 100) + "%)",
       motion.blur ? "blur(" + motion.blur * w + "px)" : "",
     ]
       .filter(Boolean)
@@ -387,8 +362,9 @@ export class Renderer {
       ctx.beginPath(); ctx.rect(0, 0, w * motion.characters, h); ctx.clip();
     }
     const chroma = c.chromaKey ? normalizeCompositing(c) : null;
+    const advancedGrade = hasAdvancedGrade(c);
     let mediaContext = ctx;
-    if (chroma) {
+    if (chroma || advancedGrade) {
       if (this.chromaSource.width !== w || this.chromaSource.height !== h) { this.chromaSource.width = w; this.chromaSource.height = h; }
       mediaContext = this.chromaSource.getContext("2d")!;
       mediaContext.clearRect(0, 0, w, h);
@@ -414,9 +390,13 @@ export class Renderer {
         );
       }
     }
-    if (chroma) ctx.drawImage(this.renderChroma(this.chromaSource, chroma, w, h), 0, 0, w, h);
+    if (chroma || advancedGrade) {
+      let media = chroma ? this.renderChroma(this.chromaSource, chroma, w, h) : this.chromaSource;
+      if (advancedGrade) media = this.gradeRenderer.render(media, c);
+      ctx.drawImage(media, 0, 0, w, h);
+    }
     ctx.restore();
-    if (c.temperature) {
+    if (c.temperature && c.gradingEnabled !== false) {
       ctx.save();
       ctx.globalCompositeOperation = "source-atop";
       ctx.fillStyle = c.temperature > 0 ? "#ff9900" : "#3388ff";
@@ -596,6 +576,14 @@ export class Renderer {
           ctx.filter = "blur(" + w / 65 + "px) brightness(1.25)";
           ctx.drawImage(this.temp, 0, 0);
           break;
+        case "Blur":
+          this.copy();
+          ctx.globalCompositeOperation = "source-over";
+          ctx.globalAlpha = 1;
+          ctx.clearRect(0, 0, w, h);
+          ctx.filter = `blur(${a * w / 55}px)`;
+          ctx.drawImage(this.temp, 0, 0);
+          break;
         case "Pixelate": {
           const pw = Math.max(12, Math.round(w / (2 + a * 45)));
           this.pixel.width = pw;
@@ -627,11 +615,11 @@ export class Renderer {
           const g = ctx.createLinearGradient(0, h, w, 0);
           g.addColorStop(0, "#46308d");
           g.addColorStop(1, "#ffbd88");
-          ctx.globalCompositeOperation = textBounds ? "source-atop" : "color";
+          // Restrict the wash to actual source alpha, including transparent PNGs.
+          ctx.globalCompositeOperation = "source-atop";
           ctx.globalAlpha = a;
           ctx.fillStyle = g;
-          if (textBounds) this.maskedFill(ctx, g, w, h);
-          else ctx.fillRect(0, 0, w, h);
+          ctx.fillRect(0, 0, w, h);
           break;
         }
         case "Letterbox":
@@ -654,11 +642,10 @@ export class Renderer {
           g.addColorStop(0, "#a653ef");
           g.addColorStop(0.5, "#4ad4e2");
           g.addColorStop(1, "#ff9f70");
-          ctx.globalCompositeOperation = textBounds ? "source-atop" : "screen";
+          ctx.globalCompositeOperation = "source-atop";
           ctx.globalAlpha = a * 0.32 * (0.8 + 0.2 * Math.sin(time));
           ctx.fillStyle = g;
-          if (textBounds) this.maskedFill(ctx, g, w, h);
-          else ctx.fillRect(0, 0, w, h);
+          ctx.fillRect(0, 0, w, h);
           break;
         }
         case "Wavy": {
@@ -671,26 +658,13 @@ export class Renderer {
           if (warped) ctx.drawImage(warped, 0, 0, w, h);
           break;
         }
+        default:
+          this.copy();
+          applyExpandedEffect(ctx, this.temp, this.pixel, w, h, e.name, a, time, region);
+          break;
       }
       ctx.restore();
     }
-  }
-
-  private maskedFill(
-    ctx: CanvasRenderingContext2D,
-    fill: CanvasGradient,
-    w: number,
-    h: number,
-  ) {
-    // Screen/color blends would otherwise paint a solid rectangle behind transparent text.
-    this.copy();
-    const mask = this.temp.getContext("2d")!;
-    mask.save();
-    mask.globalCompositeOperation = "source-in";
-    mask.fillStyle = fill;
-    mask.fillRect(0, 0, w, h);
-    mask.restore();
-    ctx.drawImage(this.temp, 0, 0);
   }
 
   private copy() {
@@ -862,7 +836,7 @@ export class Renderer {
     ctx.translate(x, y);
     ctx.rotate(rad(rotation));
     ctx.scale(sx, sy);
-    const blur = motion.blur * w + (amount("Blur") * w) / 55;
+    const blur = motion.blur * w;
     if (blur > 0) ctx.filter = `blur(${blur}px)`;
     ctx.font =
       (t.italic ? "italic " : "") +

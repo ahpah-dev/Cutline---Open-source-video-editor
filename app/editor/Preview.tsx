@@ -38,6 +38,7 @@ import { historyReducer } from "./useProject";
 import { applyPreviewTransform, snapCanvasCenter } from "./previewAlignment";
 import { maskGeometry, maskSvgPath, normalizeCompositing, type MaskFrame, type MaskGeometry } from "./visualCompositing";
 import { applyMaskPatch, maskDragPatch } from "./maskEditing";
+import { clipInActiveTransition } from "./transitionEditing";
 type Props = {
   project: Project;
   selection: Selection;
@@ -295,6 +296,10 @@ export function Preview({
     select({ kind: hit.kind, id: hit.id });
     const item = hit.kind === "text" ? project.texts.find((t) => t.id === hit.id) : project.clips.find((c) => c.id === hit.id);
     if (!item || project.lockedTracks.includes(trackKey(item))) return;
+    if (hit.kind === "clip" && clipInActiveTransition(project, hit.id, time)) {
+      onError("Move the playhead outside the transition to edit the clip's position or mask on canvas.");
+      return;
+    }
     dispatch({ type: "begin" });
     e.currentTarget.setPointerCapture(e.pointerId);
     setSnapGuides({ x: false, y: false });
@@ -422,12 +427,13 @@ export function Preview({
     : project.clips.find((c) => c.id === selection?.id);
   const selectedItem = sourceItem ? animatedItem(sourceItem, time) : undefined;
   const locked = Boolean(selectedItem && project.lockedTracks.includes(trackKey(selectedItem)));
+  const transitionActive = Boolean(selection?.kind === "clip" && clipInActiveTransition(project, selection.id, time));
   const mask = selectedItem ? normalizeCompositing(selectedItem) : null;
-  const maskActive = Boolean(bound && selectedItem && mask?.maskShape !== "None" && editingMask === selectedItem.id && !playing);
+  const maskActive = Boolean(bound && selectedItem && mask?.maskShape !== "None" && editingMask === selectedItem.id && !playing && !transitionActive);
   const contentFrame: MaskFrame | null = bound;
   const geometry = selectedItem && contentFrame ? maskGeometry(selectedItem, contentFrame, size.width, size.height) : null;
   function beginMask(e: PointerEvent<HTMLElement>, mode: "move" | "size" | "rotate") {
-    if (e.button !== 0 || !canvas.current || !geometry || !contentFrame || !selectedItem || locked) return;
+    if (e.button !== 0 || !canvas.current || !geometry || !contentFrame || !selectedItem || locked || transitionActive) return;
     e.preventDefault(); e.stopPropagation();
     setPlaying(false);
     const rect = canvas.current.getBoundingClientRect();
@@ -442,11 +448,12 @@ export function Preview({
     <section className="preview-panel">
       <div className="panel-heading">
         <span>
-          Player <span className="subtle-badge">{project.ratio}</span>
+          Preview <span className="subtle-badge">{project.ratio}</span><span className="preview-fps">{project.fps} fps</span>
         </span>
         <div className="tool-group">
+          {transitionActive && <span className="subtle-badge" title="Move the playhead outside the transition to edit position or mask handles." role="status">Transition preview</span>}
           {selectedItem && mask?.maskShape !== "None" && <button type="button"
-            title="Edit mask on canvas" aria-label="Edit mask" aria-pressed={maskActive} disabled={locked}
+            title={transitionActive ? "Move the playhead outside the transition to edit the mask" : "Edit mask on canvas"} aria-label="Edit mask" aria-pressed={maskActive} disabled={locked || transitionActive}
             className={maskActive ? "active mask-edit-button" : "mask-edit-button"}
             onClick={() => { setPlaying(false); setEditingMask(editingMask === selectedItem.id ? null : selectedItem.id); }}>
             <Shapes size={15} /><span>Edit mask</span>
@@ -511,7 +518,7 @@ export function Preview({
             </div>
           )}
           {maskActive && geometry && <MaskOverlay geometry={geometry} size={size} locked={locked} begin={beginMask} />}
-          {bound && !playing && !maskActive && (
+          {bound && !playing && !maskActive && !transitionActive && (
             <div
               className={"selection-box" + (locked ? " selection-locked" : "")}
               style={{

@@ -38,6 +38,8 @@ import {
   Sticker,
   FolderArchive,
   ExternalLink,
+  Layers2,
+  Grip,
 } from "lucide-react";
 import { Timeline } from "./editor/Timeline";
 import { Preview } from "./editor/Preview";
@@ -80,6 +82,8 @@ import { decodeClipAudio, wordsToCaptions, type WhisperChunk } from "./editor/wh
 import WhisperWorker from "./editor/whisper.worker?worker";
 import { textAnimationTiming } from "./editor/textAnimation";
 import { detachClipAudio, isTrackLocked, removeSelection, selectionItems } from "./editor/timelineOperations";
+import { LibraryPreview } from "./editor/LibraryPreview";
+import { pruneEffectKeyframes } from "./editor/effectStack";
 const NAV = [
   { name: "Media", icon: Film },
   { name: "Audio", icon: Music2 },
@@ -127,6 +131,8 @@ export default function Editor() {
   }, []);
   const [library, setLibrary] = useState("Media"),
     [search, setSearch] = useState(""),
+    [libraryCategory, setLibraryCategory] = useState("All"),
+    [previewPreset, setPreviewPreset] = useState<string | null>(null),
     [ripple, setRipple] = useState(false),
     [draggingTransition, setDraggingTransition] = useState<TransitionName | null>(null),
     [busy, setBusy] = useState("");
@@ -249,11 +255,17 @@ export default function Editor() {
   };
   const duration = projectDuration(project),
     matches = (name: string) =>
-      name.toLowerCase().includes(search.toLowerCase());
+      name.toLowerCase().includes(search.trim().toLowerCase());
   const seek = useCallback((t: number) => {
     setPlaying(false);
     setTime(Math.max(0, t));
   }, []);
+  const libraryCategories = library === "Effects"
+    ? ["All", ...new Set(EFFECTS.map((preset) => preset.category))]
+    : library === "Transitions" ? ["All", ...new Set(TRANSITIONS.map((preset) => preset.category))] : [];
+  const visibleEffects = EFFECTS.filter((preset) => (libraryCategory === "All" || preset.category === libraryCategory) && matches(`${preset.name} ${preset.description} ${preset.category}`));
+  const visibleTransitions = TRANSITIONS.filter((preset) => (libraryCategory === "All" || preset.category === libraryCategory) && matches(`${preset.name} ${preset.description} ${preset.category}`));
+  const effectTarget = selectedText ?? (selectedClip?.kind === "video" ? selectedClip : undefined);
   useEffect(() => {
     const native = window.cutlineDesktop;
     if (!native) return;
@@ -561,7 +573,7 @@ export default function Editor() {
     edit((p) => ({
       ...p,
       clips: p.clips.map((c) =>
-        c.id === selectedClip.id ? { ...c, ...patch } : c,
+        c.id === selectedClip.id ? { ...(patch.effects ? pruneEffectKeyframes(c, patch.effects) : c), ...patch } : c,
       ),
     }));
   }
@@ -652,13 +664,11 @@ export default function Editor() {
       }}
     >
       <header className="app-header">
-        <div className="brand">
+        <div className="brand" aria-label="Cutline video editor">
           <span className="brand-mark">
             <Scissors size={21} strokeWidth={2.5} />
           </span>
-          <span>
-            cutline<span className="brand-dot">.</span>
-          </span>
+          <span>cutline<span className="brand-dot">.</span></span>
         </div>
         <span className="header-divider" />
         <details
@@ -734,7 +744,7 @@ export default function Editor() {
           </button>
           <span className="local-badge">
             <HardDrive size={13} />
-            Local & free
+            On your device
           </span>
           <button
             className="button secondary editor-fullscreen-button"
@@ -797,9 +807,12 @@ export default function Editor() {
             <button
               key={name}
               className={library === name ? "active" : ""}
+              aria-pressed={library === name}
               onClick={() => {
                 setLibrary(name);
                 setSearch("");
+                setLibraryCategory("All");
+                setPreviewPreset(null);
               }}
             >
               <Icon size={21} strokeWidth={1.7} />
@@ -816,9 +829,9 @@ export default function Editor() {
           </button>
         </nav>
         <aside className="library">
-          <div className="panel-heading">
+          <div className="panel-heading library-heading">
             <span>
-              {library}
+              <span className="library-heading-copy"><strong>{library}</strong></span>
               <span className="subtle-badge">
                 {library === "Effects"
                   ? EFFECTS.length
@@ -828,6 +841,10 @@ export default function Editor() {
                       ? FILTERS.length
                       : library === "Text"
                         ? TEXT_PRESETS.length
+                        : library === "Captions"
+                          ? project.texts.filter((text) => text.kind === "caption").length
+                        : library === "Stickers"
+                          ? 12
                         : library === "Audio"
                           ? project.assets.filter((a) => a.kind === "audio").length
                           : project.assets.length}
@@ -851,7 +868,11 @@ export default function Editor() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
+            {search ? <button className="search-clear" aria-label="Clear library search" onClick={() => setSearch("")}><X size={13} /></button> : null}
           </div>
+          {libraryCategories.length ? <div className="library-categories" role="group" aria-label={`${library} categories`}>
+            {libraryCategories.map((category) => <button key={category} className={libraryCategory === category ? "active" : ""} aria-pressed={libraryCategory === category} onClick={() => setLibraryCategory(category)}>{category}</button>)}
+          </div> : null}
           <div className="library-content">
             {["Media", "Audio"].includes(library) && (
               <>
@@ -923,7 +944,7 @@ export default function Editor() {
                           </span>
                         </button>
                         <strong title={asset.name}>{asset.name}</strong>
-                        <small>{asset.sizeLabel}</small>
+                        <small className="asset-meta"><span>{asset.kind === "audio" ? "Audio" : asset.kind === "image" ? "Image" : "Video"}</span><span>{asset.sizeLabel}</span></small>
                       </div>
                     ))}
                 </div>
@@ -1077,13 +1098,9 @@ export default function Editor() {
             )}
             {library === "Effects" && (
               <>
-                <p className="library-description">
-                  {selectedClip?.kind === "video" || selectedText
-                    ? "Click to add or remove. Stack effects and adjust their strength in the inspector."
-                    : "Select a video or text clip to add effects."}
-                </p>
+                <div className="library-context"><Layers2 size={13} /><span>{effectTarget ? "On" : "Select a visual clip to apply"}</span>{effectTarget ? <strong title={effectTarget.label}>{effectTarget.label || "Text"}</strong> : null}{effectTarget?.effects.length ? <small>{effectTarget.effects.length} stacked</small> : null}</div>
                 <div className="effect-grid">
-                  {EFFECTS.filter((e) => matches(e.name)).map((effect) => {
+                  {visibleEffects.map((effect) => {
                     const target = selectedText ?? selectedClip;
                     const active = target?.effects?.some(
                       (e) => e.name === effect.name,
@@ -1092,6 +1109,13 @@ export default function Editor() {
                       <button
                         key={effect.name}
                         className={"effect-card" + (active ? " active" : "")}
+                        aria-label={`${effect.name} — ${effect.description}. ${active ? "Remove effect" : "Add effect"}`}
+                        title={`${effect.name} — ${effect.description}`}
+                        aria-pressed={active ?? false}
+                        onPointerEnter={() => setPreviewPreset(`effect:${effect.name}`)}
+                        onPointerLeave={() => setPreviewPreset(null)}
+                        onFocus={() => setPreviewPreset(`effect:${effect.name}`)}
+                        onBlur={() => setPreviewPreset(null)}
                         onClick={() => {
                           if (!target || target.kind === "audio") {
                             notify(
@@ -1106,57 +1130,47 @@ export default function Editor() {
                               )
                             : [
                                 ...(target.effects ?? []),
-                                { name: effect.name, amount: 50, ...(effect.name === "Wavy" ? { waves: 4 } : {}) },
+                                { name: effect.name, amount: effect.defaultAmount, ...(effect.name === "Wavy" ? { waves: 4 } : {}) },
                               ];
                           if (selectedText)
                             edit((p) => ({
                               ...p,
                               texts: p.texts.map((t) =>
                                 t.id === selectedText.id
-                                  ? { ...t, effects }
+                                  ? { ...pruneEffectKeyframes(t, effects), effects }
                                   : t,
                               ),
                             }));
                           else applyVideo({ effects });
                         }}
                       >
-                        <span
-                          className={
-                            "effect-art effect-art-" + effect.name.toLowerCase()
-                          }
-                          style={
-                            { "--effect-color": effect.color } as CSSProperties
-                          }
-                        >
-                          <span>{effect.icon}</span>
-                          {active && (
-                            <i>
-                              <Check size={12} />
-                            </i>
-                          )}
+                        <span className="preset-art" style={{ "--preset-accent": effect.color } as CSSProperties}>
+                          <LibraryPreview kind="effect" name={effect.name} amount={effect.defaultAmount} animate={previewPreset === `effect:${effect.name}`} />
+                          <span className={"preset-card-status" + (active ? " applied" : "")}><span>{active ? <Check size={12} /> : <Plus size={12} />}</span></span>
                         </span>
-                        <strong>{effect.name}</strong>
-                        <small>{effect.description}</small>
+                        <span className="preset-copy"><strong>{effect.name}</strong><small>{effect.category}</small>{effect.name === "Strobe" ? <span className="flashing-effect-warning">Flashing effect</span> : null}</span>
                       </button>
                     );
                   })}
                 </div>
+                {!visibleEffects.length ? <div className="catalogue-empty"><Search size={22} /><strong>No effects found</strong><p>Try another search or category.</p><button onClick={() => { setSearch(""); setLibraryCategory("All"); }}>Reset filters</button></div> : null}
               </>
             )}
             {library === "Transitions" && (
               <>
-                <p className="library-description">
-                  Drag a transition onto the join between two visual clips on
-                  the same layer. Click a join to select it; adjust duration
-                  in the inspector.
-                </p>
+                <div className="transition-drop-guide" aria-hidden="true"><span>A</span><i><Blend size={14} /></i><span>B</span><small>Drop on the join</small></div>
                 <div className="transition-grid">
-                  {TRANSITIONS.filter((t) => matches(t.name)).map((t) => (
+                  {visibleTransitions.map((t) => (
                     <button
                       key={t.name}
                       draggable
-                      title={`Drag ${t.name} onto a clip join`}
+                      title={`${t.description}. Drag ${t.name} onto a clip join`}
                       aria-label={`${t.name} transition — drag to clip join`}
+                      aria-pressed={selectedClip?.transition === t.name}
+                      onPointerEnter={() => setPreviewPreset(`transition:${t.name}`)}
+                      onPointerLeave={() => setPreviewPreset(null)}
+                      onFocus={() => setPreviewPreset(`transition:${t.name}`)}
+                      onBlur={() => setPreviewPreset(null)}
                       onDragStart={(e) => {
                         e.dataTransfer.setData("application/cutline-transition", t.name);
                         e.dataTransfer.setData("text/plain", t.name);
@@ -1177,11 +1191,15 @@ export default function Editor() {
                         applyJoinTransition(incoming?.id ?? null, t.name);
                       }}
                     >
-                      <span>{t.icon}</span>
-                      <strong>{t.name}</strong>
+                      <span className="preset-art" style={{ "--preset-accent": t.color } as CSSProperties}>
+                        <LibraryPreview kind="transition" name={t.name} animate={previewPreset === `transition:${t.name}`} />
+                        {selectedClip?.transition === t.name ? <span className="preset-card-status applied"><span><Check size={12} /></span></span> : null}
+                      </span>
+                      <span className="preset-copy"><strong>{t.name}</strong><small>{t.category}</small></span>
                     </button>
                   ))}
                 </div>
+                {!visibleTransitions.length ? <div className="catalogue-empty"><Search size={22} /><strong>No transitions found</strong><p>Try another search or category.</p><button onClick={() => { setSearch(""); setLibraryCategory("All"); }}>Reset filters</button></div> : null}
               </>
             )}
             {library === "Filters" && (
@@ -1219,8 +1237,7 @@ export default function Editor() {
             )}
           </div>
           <div className="library-footer">
-            <span className="save-dot" />
-            No subscriptions. No watermarks.
+            {library === "Effects" ? <><Layers2 size={12} />Click to stack · Hover to preview</> : library === "Transitions" ? <><Grip size={12} />Drag to a join · Set duration in inspector</> : <><HardDrive size={12} />Free to create. Yours to keep.</>}
           </div>
         </aside>
         <Preview

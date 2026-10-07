@@ -12,6 +12,8 @@ await build({
         timeline: "tests/timeline-component.test.tsx",
         codex: "tests/codex-editing.test.ts",
         compositing: "tests/visual-compositing.test.ts",
+        effects: "tests/effect-stack.test.tsx",
+        color: "tests/color-detection.test.tsx",
       },
       formats: ["es"],
       fileName: (_format, name) => name + ".js",
@@ -26,7 +28,7 @@ await build({
 });
 const result = spawnSync(
   process.execPath,
-  ["--test", "work/unit-tests/model.js", "work/unit-tests/timeline.js", "work/unit-tests/codex.js", "work/unit-tests/compositing.js"],
+  ["--test", "work/unit-tests/model.js", "work/unit-tests/timeline.js", "work/unit-tests/codex.js", "work/unit-tests/compositing.js", "work/unit-tests/effects.js", "work/unit-tests/color.js"],
   { stdio: "inherit", env: { ...process.env, NODE_ENV: "test" } },
 );
 process.exitCode = result.status ?? 1;

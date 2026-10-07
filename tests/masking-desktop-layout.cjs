@@ -6,7 +6,7 @@ const { zipSync, strToU8 } = require("fflate");
 const { app, BrowserWindow } = require("electron");
 
 process.env.CUTLINE_LAYOUT_TEST = "1";
-process.env.CUTLINE_TEST_PROFILE = path.resolve("work/masking-layout-profile-050");
+process.env.CUTLINE_TEST_PROFILE ??= path.resolve("work/masking-layout-profile-050");
 require("../electron/main.cjs");
 
 function waitFor(condition, timeoutMs = 15000) {
@@ -41,7 +41,7 @@ function rhythmWav() {
   return output;
 }
 
-async function importSyntheticProject(contents) {
+async function importSyntheticProject(contents, catalogue = false) {
   const images = await contents.executeJavaScript(`(() => {
     const create = (warm) => {
       const canvas = document.createElement('canvas'); canvas.width = 1920; canvas.height = 1080;
@@ -84,6 +84,15 @@ async function importSyntheticProject(contents) {
       { id: "mask-title", text:"Beyond the frame.", label:"Beyond the frame.", start:0, duration:16, track:3, kind:"text", x:.5,y:.87,fontSize:76,fontFamily:"Manrope Variable",fontWeight:700,color:"#fff7f0",shadowBlur:5,background:false },
     ],
   };
+  if (catalogue) {
+    project.name = "COLOR STORIES / The quiet between";
+    project.layerCount = 3; project.lockedTracks = [];
+    project.clips[0].sourceEnd = 8;
+    project.clips[1] = { ...project.clips[1], label: "Golden hour", track: 1, start: 8, sourceEnd: 8,
+      maskShape: "None", transition: "Dissolve", transitionDuration: 1 };
+    project.texts[0] = { ...project.texts[0], track: 2, text: "The quiet between.", label: "The quiet between.",
+      y: .76, fontFamily: "Playfair Display Variable", fontSize: 90, fontWeight: 500 };
+  }
   const backup = zipSync({
     "project.json": strToU8(JSON.stringify(project)),
     "media/scene": new Uint8Array(Buffer.from(images[0].image, "base64")),
@@ -101,7 +110,9 @@ async function importSyntheticProject(contents) {
   await waitFor(() => contents.executeJavaScript('Boolean(document.querySelector(\'[data-clip-id="mask-subject"]\') && document.querySelector(".toast")?.textContent.includes("Project restored with its media.") && !document.querySelector(".busy-indicator") && !document.querySelector(".preview-loading"))'));
 }
 
-app.whenReady().then(async () => {
+module.exports = { waitFor, importSyntheticProject };
+
+if (require.main === module) app.whenReady().then(async () => {
   const win = BrowserWindow.getAllWindows()[0];
   const errors = [];
   win.webContents.on("console-message", (event) => { if (event.level === "error") errors.push(event.message); });

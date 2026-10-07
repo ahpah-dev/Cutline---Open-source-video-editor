@@ -1,4 +1,5 @@
 import { normalizeCrop } from "./crop";
+import { CURVE_CHANNELS, GRADE_RANGES, normalizeGrade } from "./colorGrading";
 import { BLEND_MODES, MASK_SHAPES, normalizeCompositing } from "./visualCompositing";
 import {
   clipDuration, COMBO_ANIMATIONS, endOf, freezeFrame, makeClip, makeText, normalizeGradientStops,
@@ -6,6 +7,7 @@ import {
   uid, type Clip, type Project, type TextClip,
 } from "./model";
 import { ANIMATIONS, EFFECTS, FILTERS, FONTS, TEXT_PRESETS, TRANSITIONS } from "./presets";
+import { pruneEffectKeyframes } from "./effectStack";
 import { defaultAnimationSettings } from "./textAnimation";
 
 type Schema = {
@@ -66,6 +68,10 @@ const clipFields: Record<string, Schema> = {
   fit: choices(["cover", "contain"]), brightness: number(0, 200), contrast: number(0, 200),
   crop: object({ x: number(0, 0.99), y: number(0, 0.99), width: number(0.01, 1), height: number(0.01, 1) }, ["x", "y", "width", "height"]),
   saturation: number(0, 200), temperature: number(-100, 100),
+  gradingEnabled: boolean,
+  ...Object.fromEntries(Object.entries(GRADE_RANGES).map(([name, range]) => [name, number(range[0], range[1], name === "exposure" ? "Display-referred exposure in stops." : "Color grading control.")])),
+  colorCurves: object(Object.fromEntries(CURVE_CHANNELS.map((channel) => [channel,
+    { ...array(object({ x: number(0, 1), y: number(0, 1) }, ["x", "y"]), 12), minItems: 2 }])), [...CURVE_CHANNELS]),
   filter: choices(FILTERS.map((value) => value.name)),
 };
 const projectFields = {
@@ -165,6 +171,7 @@ export function editingCatalog(fonts = FONTS) {
     textPresets: TEXT_PRESETS.map((preset) => preset.name), animations: ANIMATIONS,
     comboAnimations: COMBO_ANIMATIONS, effects: EFFECTS.map((effect) => effect.name), masks: MASK_SHAPES, blendModes: BLEND_MODES,
     transitions: TRANSITIONS.map((transition) => transition.name), filters: FILTERS.map((filter) => filter.name),
+    colorGrading: { ranges: GRADE_RANGES, units: "Exposure is display-referred stops. Wheel hue uses degrees and strength 0–100; tonal/luminance/tint controls use −100–100. Curves use 0–1 input/output points, up to 12 per channel. Scalar controls support keyframes. gradingEnabled bypasses all color controls and look, but not effects/chroma/masks. This is 8-bit sRGB/Rec.709 grading, not scene-linear HDR/RAW." },
     fonts, textProperties: textFields, clipProperties: clipFields,
   };
 }
@@ -195,6 +202,7 @@ export function applyCodexEdits(project: Project, input: unknown) {
   const checkClip = (clip: Clip) => {
     clip.crop = normalizeCrop(clip.crop);
     Object.assign(clip, normalizeCompositing(clip));
+    Object.assign(clip, normalizeGrade(clip));
     const asset = next.assets.find((value) => value.id === clip.assetId)!;
     if (clip.sourceEnd <= clip.sourceStart || (clip.sourceEnd - clip.sourceStart) / clip.speed < 1 / next.fps - 1e-8) throw new Error("A clip must contain at least one frame.");
     if (clip.frozenAt === undefined && asset.kind !== "image" && asset.kind !== "demo" && clip.sourceEnd > asset.duration + 1 / next.fps) throw new Error("The clip trim extends beyond its source media.");
@@ -268,9 +276,14 @@ export function applyCodexEdits(project: Project, input: unknown) {
         } else if (op.op === "remove") {
           next.clips = next.clips.filter((clip) => clip.id !== item.id); next.texts = next.texts.filter((text) => text.id !== item.id);
         } else if (op.op === "effect") {
-          const effects = item.effects.filter((effect) => effect.name !== op.name);
-          if (!op.remove) effects.push({ name: op.name as Clip["effects"][number]["name"], amount: (op.amount ?? 50) as number, ...(op.name === "Wavy" ? { waves: (op.waves ?? 4) as number } : {}) });
-          replace({ ...item, effects });
+          if ("assetId" in item && item.kind === "audio") throw new Error("Visual effects require a video, image or text clip, not an audio clip.");
+          const existing = item.effects.find((effect) => effect.name === op.name);
+          const definition = EFFECTS.find((effect) => effect.name === op.name);
+          const updated = { name: op.name as Clip["effects"][number]["name"], amount: (op.amount ?? existing?.amount ?? definition?.defaultAmount ?? 50) as number,
+            ...(op.name === "Wavy" ? { waves: (op.waves ?? existing?.waves ?? 4) as number } : {}) };
+          const effects = op.remove ? item.effects.filter((effect) => effect.name !== op.name)
+            : existing ? item.effects.map((effect) => effect.name === op.name ? updated : effect) : [...item.effects, updated];
+          replace({ ...pruneEffectKeyframes(item, effects), effects });
         } else if (op.op === "transition") {
           if (!("sourceEnd" in item) || item.kind !== "video") throw new Error("Transitions require an incoming visual clip.");
           const previous = transitionSource(next, item);

@@ -43,6 +43,9 @@ import { waveformColumns, waveformFromBuffer } from "../app/editor/waveform";
 import { runAudioReliabilityChecks } from "./audio-reliability";
 import { runVisualCompositingTests } from "./visual-compositing-engine";
 import { runMaskUiChecks } from "./mask-ui-engine";
+import { runExpandedEffectsTests } from "./expanded-effects-engine";
+import { runTransitionTests } from "./transitions-engine";
+import { runColorGradingChecks } from "./color-grading-engine";
 import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "../app/editor/codexTypes";
 
 const assert = (condition: unknown, message: string) => {
@@ -389,11 +392,11 @@ export async function runEngineTests() {
     },
   );
   await check(
-    "All twelve transitions render against the preceding clip",
+    "Every catalog transition renders against the preceding clip at the cut midpoint",
     () => {
       const next = { ...makeClip(p.assets[1], 1, c.track), transitionDuration: 1 };
       const project = { ...p, clips: [{ ...c, sourceEnd: 1 }, next] };
-      renderer.draw(canvas, project, 1.35, new Map());
+      renderer.draw(canvas, project, 1, new Map());
       const baseline = hash(canvas);
       for (const t of TRANSITIONS.filter((t) => t.name !== "None")) {
         renderer.draw(
@@ -402,7 +405,7 @@ export async function runEngineTests() {
             ...project,
             clips: [project.clips[0], { ...next, transition: t.name }],
           },
-          1.35,
+          1,
           new Map(),
         );
         assert(hash(canvas) !== baseline, t.name + " does not render");
@@ -1352,7 +1355,10 @@ export async function runEngineTests() {
   });
   await runVisualCompositingTests(check, assert);
   await runMaskUiChecks(check);
+  await runColorGradingChecks(check);
   await runAudioReliabilityChecks(check);
+  await runExpandedEffectsTests(check, assert);
+  await runTransitionTests(check, assert);
   return { passed, failures, details };
 }
 (

@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { CropDialog } from "./CropDialog";
 import { FULL_CROP, normalizeCrop } from "./crop";
 import { BLEND_MODES, DEFAULT_COMPOSITING, MASK_SHAPES, maskSvgPath, normalizeCompositing, type VisualCompositing } from "./visualCompositing";
 import { normalizeAudioGain } from "./waveform";
+import { moveEffect, pruneEffectKeyframes, resetEffect } from "./effectStack";
+import { ColorGradingControls } from "./ColorGradingControls";
+import { resetGrade } from "./colorGrading";
+import { ObjectDetectionControls } from "./ObjectDetectionControls";
 import {
   SlidersHorizontal,
   RotateCcw,
@@ -24,6 +28,9 @@ import {
   RefreshCw,
   Crop,
   LockKeyhole,
+  ArrowUp,
+  ArrowDown,
+  Layers2,
 } from "lucide-react";
 import {
   ANIMATIONS,
@@ -31,6 +38,7 @@ import {
   COMMON_SYSTEM_FONTS,
   FONTS,
   TRANSITIONS,
+  EFFECTS,
 } from "./presets";
 import { animationLayers, defaultAnimationSettings, textAnimationTiming } from "./textAnimation";
 import {
@@ -46,6 +54,7 @@ import {
   clock,
   interpolatedTransform,
   normalizeGradientStops,
+  propertyValue,
   setPropertyKeyframe,
   togglePropertyKeyframe,
   transitionSource,
@@ -145,7 +154,7 @@ export function Inspector({
     ...FONTS,
     ...installedFonts,
   ].some((font) => font.toLocaleLowerCase() === text?.fontFamily.toLocaleLowerCase());
-  const effectsTab = text ? "Effects" : "Basic";
+  const effectsTab = "Effects";
   useEffect(() => {
     if (!focusEffects) return;
     const frame = requestAnimationFrame(() => setTab(effectsTab));
@@ -158,7 +167,7 @@ export function Inspector({
     edit(
       (p) => ({
         ...p,
-        clips: p.clips.map((c) => c.id === clip?.id ? applyPatch(c, patch, time, p.fps) : c),
+        clips: p.clips.map((c) => c.id === clip?.id ? applyInspectorPatch(c, patch, time, p.fps) : c),
       }),
       clip?.id + ":" + group,
     );
@@ -169,7 +178,7 @@ export function Inspector({
     edit(
       (p) => ({
         ...p,
-        texts: p.texts.map((t) => t.id === text?.id ? applyPatch(t, patch, time, p.fps) : t),
+        texts: p.texts.map((t) => t.id === text?.id ? applyInspectorPatch(t, patch, time, p.fps) : t),
       }),
       text?.id + ":" + group,
     );
@@ -331,7 +340,7 @@ export function Inspector({
   };
   const activeTab = (text
     ? ["Basic", "Style", "Animation", "Effects", "Mask"]
-    : clip?.kind === "audio" ? ["Basic", "Audio"] : ["Basic", "Animation", "Color", "Audio", "Mask"]
+    : clip?.kind === "audio" ? ["Basic", "Audio"] : ["Basic", "Animation", "Effects", "Color", "Audio", "Mask"]
   ).includes(tab)
     ? tab
     : "Basic";
@@ -427,15 +436,16 @@ export function Inspector({
               </span>
             </div>
           </div>
-          <div className="inspector-tabs">
+          <div className="inspector-tabs" role="group" aria-label="Clip properties">
             {(text
               ? ["Basic", "Style", "Animation", "Effects", "Mask"]
               : clip?.kind === "audio"
                 ? ["Basic", "Audio"]
-                : ["Basic", "Animation", "Color", "Audio", "Mask"]
+                : ["Basic", "Animation", "Effects", "Color", "Audio", "Mask"]
             ).map((t) => (
               <button
                 className={activeTab === t ? "active" : ""}
+                aria-pressed={activeTab === t}
                 key={t}
                 onClick={() => setTab(t)}
               >
@@ -468,6 +478,12 @@ export function Inspector({
                   return { ...p, clips: p.clips.map(reset), texts: p.texts.map(reset) };
                 })} />
               {clip && <ChromaControls item={clip} onChange={updateClip} keyframe={(name, value) => keyButton(clip, name, value)} />}
+              {clip?.kind === "video" && project.assets.find((a) => a.id === clip.assetId)?.url && <ObjectDetectionControls
+                key={JSON.stringify([clip.id, clip.assetId, project.assets.find((a) => a.id === clip.assetId)?.url, clip.sourceStart, clip.sourceEnd, clip.frozenAt, clip.speed, clip.crop])}
+                clip={clip} asset={project.assets.find((a) => a.id === clip.assetId)!} project={project} time={time}
+                apply={(patch, clearKeys = []) => edit((p) => ({ ...p, clips: p.clips.map((c) => c.id === clip.id ? {
+                  ...c, ...patch, propertyKeyframes: Object.fromEntries(Object.entries(c.propertyKeyframes ?? {}).filter(([name]) => !clearKeys.includes(name))),
+                } : c) }))} />}
             </>}
             {text && activeTab === "Basic" && (
               <>
@@ -780,6 +796,15 @@ export function Inspector({
                 effects={text.effects ?? []}
                 keyframe={(name, amount) => keyButton(text, `effect:${name}`, amount)}
                 onChange={(effects, group) => updateText({ effects }, group)}
+                onReset={(name) => edit((p) => ({ ...p, texts: p.texts.map((t) => t.id === text.id ? resetEffect(t, name) : t) }))}
+              />
+            )}
+            {clip?.kind === "video" && activeTab === "Effects" && (
+              <EffectsControls
+                effects={clip.effects}
+                keyframe={(name, amount) => keyButton(clip, `effect:${name}`, amount)}
+                onChange={(effects, group) => updateClip({ effects }, group)}
+                onReset={(name) => edit((p) => ({ ...p, clips: p.clips.map((c) => c.id === clip.id ? resetEffect(c, name) : c) }))}
               />
             )}
             {animationItem && activeTab === "Animation" && (
@@ -1121,6 +1146,7 @@ export function Inspector({
                           ))}
                         </select>
                       </Field>
+                      <p className="field-note">{TRANSITIONS.find((entry) => entry.name === clip.transition)?.description}</p>
                       {previousClip && (
                         <Range
                           label="Duration"
@@ -1140,124 +1166,14 @@ export function Inspector({
                           : "Place another visual clip immediately before this one on the same layer to add a transition."}
                       </p>
                     </Section>
-                    <Section title={"Effects · " + clip.effects.length}>
-                      {clip.effects.length === 0 ? (
-                        <p className="field-note">
-                          Add effects from the Effects library. Stack them and
-                          tune each amount here.
-                        </p>
-                      ) : (
-                        clip.effects.map((effect) => (
-                          <div className="effect-control-wrap" key={effect.name}>
-                            <div className="effect-control">
-                              <Range
-                                label={effect.name}
-                                keyframe={keyButton(clip, `effect:${effect.name}`, effect.amount)}
-                                value={effect.amount}
-                                min={0}
-                                max={100}
-                                suffix="%"
-                                onChange={(v) =>
-                                  updateClip(
-                                    {
-                                      effects: clip.effects.map((e) =>
-                                        e.name === effect.name
-                                          ? { ...e, amount: v }
-                                          : e,
-                                      ),
-                                    },
-                                    effect.name,
-                                  )
-                                }
-                              />
-                              <button
-                                title={"Remove " + effect.name}
-                                aria-label={"Remove " + effect.name}
-                                onClick={() =>
-                                  updateClip(
-                                    {
-                                      effects: clip.effects.filter(
-                                        (e) => e.name !== effect.name,
-                                      ),
-                                    },
-                                    "",
-                                  )
-                                }
-                              >
-                                <X size={13} />
-                              </button>
-                            </div>
-                            {effect.name === "Wavy" && <Range
-                              label="Wave count"
-                              value={effect.waves ?? 4}
-                              min={1}
-                              max={16}
-                              step={1}
-                              suffix=" waves"
-                              onChange={(waves) => updateClip({ effects: clip.effects.map((e) => e.name === effect.name ? { ...e, waves } : e) }, `${effect.name}:waves`)}
-                            />}
-                          </div>
-                        ))
-                      )}
-                    </Section>
                   </>
                 )}
               </>
             )}
             {clip && activeTab === "Color" && (
-              <Section
-                title="Color adjustments"
-                action={
-                  <button
-                    title="Reset color"
-                    aria-label="Reset color"
-                    onClick={() => edit((p) => ({ ...p, clips: p.clips.map((c) => {
-                      if (c.id !== clip.id) return c;
-                      const propertyKeyframes = { ...c.propertyKeyframes };
-                      for (const name of ["brightness", "contrast", "saturation", "temperature", "filter"]) delete propertyKeyframes[name];
-                      return { ...c, brightness: 100, contrast: 100, saturation: 100, temperature: 0, filter: "Original", propertyKeyframes };
-                    }) }))}
-                  >
-                    <RotateCcw size={14} />
-                  </button>
-                }
-              >
-                <div className="current-look">
-                  Look {ck("filter", clip.filter)} <span>{clip.filter}</span>
-                </div>
-                <Range
-                  label="Brightness"
-                  keyframe={ck("brightness", clip.brightness)}
-                  value={clip.brightness}
-                  min={0}
-                  max={200}
-                  onChange={(v) => updateClip({ brightness: v })}
-                />
-                <Range
-                  label="Contrast"
-                  keyframe={ck("contrast", clip.contrast)}
-                  value={clip.contrast}
-                  min={0}
-                  max={200}
-                  onChange={(v) => updateClip({ contrast: v })}
-                />
-                <Range
-                  label="Saturation"
-                  keyframe={ck("saturation", clip.saturation)}
-                  value={clip.saturation}
-                  min={0}
-                  max={200}
-                  onChange={(v) => updateClip({ saturation: v })}
-                />
-                <Range
-                  label="Temperature"
-                  keyframe={ck("temperature", clip.temperature)}
-                  value={clip.temperature}
-                  min={-100}
-                  max={100}
-                  onChange={(v) => updateClip({ temperature: v })}
-                />
-              </Section>
+              <ColorGradingControls clip={clip} onChange={updateClip}
+                keyframe={(name, value) => keyButton(clip, name, value)}
+                reset={() => edit((p) => ({ ...p, clips: p.clips.map((c) => c.id === clip.id ? resetGrade(c) : c) }))} />
             )}
             {clip && activeTab === "Audio" && (
               <Section title="Audio">
@@ -1527,16 +1443,20 @@ function AnimationTuner({ name, options, onChange }: {
     </Field>
   </div>;
 }
-function applyPatch<T extends Clip | TextClip>(item: T, patch: Partial<T>, time: number, fps: number): T {
+export function applyInspectorPatch<T extends Clip | TextClip>(item: T, patch: Partial<T>, time: number, fps: number): T {
   let next = { ...item };
   for (const [name, value] of Object.entries(patch)) {
     if (name === "effects" && Array.isArray(value)) {
       const incoming = value as Clip["effects"];
+      next = pruneEffectKeyframes(next, incoming);
       next.effects = incoming.map((effect) => {
         const track = `effect:${effect.name}`;
         if (!item.propertyKeyframes?.[track]?.length) return effect;
-        next = setPropertyKeyframe(next, track, time - item.start, effect.amount, fps);
-        return item.effects.find((old) => old.name === effect.name) ?? effect;
+        if (effect.amount !== Number(propertyValue(item, track, time - item.start)))
+          next = setPropertyKeyframe(next, track, time - item.start, effect.amount, fps);
+        // Keep the non-animated base amount, but do not discard settings such as
+        // wave count or reorder-only edits when an intensity is keyframed.
+        return { ...effect, amount: item.effects.find((old) => old.name === effect.name)?.amount ?? effect.amount };
       });
     } else if ((typeof value === "number" || typeof value === "string" || typeof value === "boolean") && item.propertyKeyframes?.[name]?.length) {
       next = setPropertyKeyframe(next, name, time - item.start, value, fps);
@@ -1550,24 +1470,42 @@ function EffectsControls({
   effects,
   onChange,
   keyframe,
+  onReset,
 }: {
   effects: Clip["effects"];
   onChange: (effects: Clip["effects"], group: string) => void;
   keyframe?: (name: string, amount: number) => ReactNode;
+  onReset: (name: Clip["effects"][number]["name"]) => void;
 }) {
   return (
-    <Section title={"Effects · " + effects.length}>
+    <Section title={"Effect stack · " + effects.length} action={effects.length > 0
+      ? <button type="button" title="Remove all effects" aria-label="Remove all effects" onClick={() => onChange([], "effects-clear")}><Trash2 size={14} /></button>
+      : <Layers2 size={14} />}>
       {!effects.length && (
-        <p className="field-note">
-          Add effects from the Effects library. They apply only to this text
-          clip, including its outline and background.
-        </p>
+        <div className="effect-stack-empty"><Layers2 size={24} /><strong>Build your look</strong>
+          <p>Choose an effect from the library. Stack and reorder treatments here; each intensity can be keyframed.</p></div>
       )}
-      {effects.map((effect) => (
-        <div className="effect-control-wrap" key={effect.name}>
-          <div className="effect-control">
+      {effects.length > 0 && <p className="field-note">Treatments render from top to bottom. Motion effects modify the clip transform.</p>}
+      <div className="effect-stack">
+      {effects.map((effect, index) => (
+        <div className="effect-stack-item" key={effect.name}>
+          <div className="effect-stack-heading">
+            <span className="effect-stack-index">{String(index + 1).padStart(2, "0")}</span>
+            <strong>{effect.name}</strong>
+            <div className="effect-stack-tools">
+              <button type="button" title={`Move ${effect.name} earlier`} aria-label={`Move ${effect.name} earlier`} disabled={index === 0}
+                onClick={() => onChange(moveEffect(effects, index, -1), "effects-reorder")}><ArrowUp size={13} /></button>
+              <button type="button" title={`Move ${effect.name} later`} aria-label={`Move ${effect.name} later`} disabled={index === effects.length - 1}
+                onClick={() => onChange(moveEffect(effects, index, 1), "effects-reorder")}><ArrowDown size={13} /></button>
+              <button type="button" title={`Reset ${effect.name}`} aria-label={`Reset ${effect.name}`} onClick={() => onReset(effect.name)}><RotateCcw size={13} /></button>
+              <button type="button" title={`Remove ${effect.name}`} aria-label={`Remove ${effect.name}`}
+                onClick={() => onChange(effects.filter((e) => e.name !== effect.name), "effects-remove")}><X size={13} /></button>
+            </div>
+          </div>
+          <p className="effect-stack-description">{EFFECTS.find((entry) => entry.name === effect.name)?.description}</p>
+          {effect.name === "Strobe" && <p className="field-note" role="note">Flashing effect (8 Hz). Use cautiously; flashing imagery can affect photosensitive viewers.</p>}
             <Range
-              label={effect.name}
+              label="Intensity"
               keyframe={keyframe?.(effect.name, effect.amount)}
               value={effect.amount}
               min={0}
@@ -1582,19 +1520,6 @@ function EffectsControls({
                 )
               }
             />
-            <button
-              title={"Remove " + effect.name}
-              aria-label={"Remove " + effect.name}
-              onClick={() =>
-                onChange(
-                  effects.filter((e) => e.name !== effect.name),
-                  "",
-                )
-              }
-            >
-              <X size={13} />
-            </button>
-          </div>
           {effect.name === "Wavy" && <Range
             label="Wave count"
             value={effect.waves ?? 4}
@@ -1606,6 +1531,7 @@ function EffectsControls({
           />}
         </div>
       ))}
+      </div>
     </Section>
   );
 }
@@ -1770,10 +1696,12 @@ function Toggle({
   onChange: (v: boolean) => void;
   keyframe?: ReactNode;
 }) {
+  const inputId = useId();
   return (
-    <label className="toggle-field">
+    <label className="toggle-field" htmlFor={inputId}>
       <span className="field-label">{label}{keyframe}</span>
       <input
+        id={inputId}
         type="checkbox"
         checked={value}
         onChange={(e) => onChange(e.target.checked)}
