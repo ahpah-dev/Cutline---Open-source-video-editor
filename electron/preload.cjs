@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld("cutlineDesktop", {
   codexConnect: (tools) => ipcRenderer.invoke("codex:connect", tools),
   codexStatus: () => ipcRenderer.invoke("codex:status"),
   codexLogin: () => ipcRenderer.invoke("codex:login"),
-  codexSend: (prompt, projectId, model) => ipcRenderer.invoke("codex:send", { prompt, projectId, model }),
+  codexSend: (prompt, projectId, model, effort, images) => ipcRenderer.invoke("codex:send", { prompt, projectId, model, effort, images }),
   codexStop: () => ipcRenderer.invoke("codex:stop"),
   codexReset: () => ipcRenderer.invoke("codex:reset"),
   codexDisconnect: () => ipcRenderer.invoke("codex:disconnect"),

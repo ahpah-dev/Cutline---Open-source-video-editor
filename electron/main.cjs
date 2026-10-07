@@ -29,7 +29,7 @@ function getCodex() {
     runTool: (name, args) => new Promise((resolve, reject) => {
       if (!mainWindow || mainWindow.isDestroyed()) { reject(new Error("The editor is closed.")); return; }
       const id = randomUUID();
-      const timer = setTimeout(() => { codexTools.delete(id); reject(new Error("The editor did not respond. Retry the edit.")); }, 60000);
+      const timer = setTimeout(() => { codexTools.delete(id); reject(new Error("The editor did not respond. Retry the edit.")); }, name === "cutline_analyze_audio" ? 300000 : 60000);
       codexTools.set(id, { resolve, reject, timer });
       mainWindow.webContents.send("codex:tool-request", { id, name, args, projectId: codex.projectId });
     }),
@@ -239,7 +239,7 @@ ipcMain.handle("fonts:list", (event, refresh = false) => {
 
 ipcMain.handle("codex:connect", (event, tools) => { requireTrustedSender(event); return getCodex().connect(tools); });
 ipcMain.handle("codex:status", (event) => { requireTrustedSender(event); return getCodex().state; });
-ipcMain.handle("codex:send", (event, payload) => { requireTrustedSender(event); return getCodex().send(payload?.prompt, payload?.projectId, payload?.model); });
+ipcMain.handle("codex:send", (event, payload) => { requireTrustedSender(event); return getCodex().send(payload?.prompt, payload?.projectId, payload?.model, payload?.effort, payload?.images); });
 ipcMain.handle("codex:reset", (event) => { requireTrustedSender(event); cancelCodexTools(); getCodex().reset(); });
 ipcMain.handle("codex:disconnect", (event) => { requireTrustedSender(event); cancelCodexTools(); getCodex().disconnect(); });
 ipcMain.handle("codex:stop", (event) => { requireTrustedSender(event); cancelCodexTools(); return getCodex().stop(); });

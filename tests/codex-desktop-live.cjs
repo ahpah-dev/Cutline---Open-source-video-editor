@@ -34,6 +34,10 @@ app.on("web-contents-created", (_event, contents) => {
       const modelList = await contents.executeJavaScript('[...document.querySelector("[aria-label=\\"Codex model\\"]").options].map(option=>({id:option.value,name:option.textContent}))');
       if (modelList.some(({ id }) => /^gpt-5\.(5|6)(-|$)/.test(id))) throw new Error("Removed GPT-5 models are still in the picker.");
       console.log("CUTLINE_CODEX_MODEL_PICKER", JSON.stringify(modelList));
+      const efforts = await contents.executeJavaScript('[...document.querySelector("[aria-label=\\"Codex reasoning effort\\"]").options].map(option=>option.value)');
+      const capabilities = await contents.executeJavaScript('window.cutlineDesktop.codexStatus().then(state=>state.models.map(model=>({id:model.id,efforts:model.reasoningEfforts,defaultEffort:model.defaultEffort,inputModalities:model.inputModalities})))');
+      if (!efforts.includes("low") || !efforts.includes("high")) throw new Error("Supported reasoning levels did not reach the UI.");
+      console.log("CUTLINE_CODEX_MODEL_CAPABILITIES",JSON.stringify(capabilities));
       if (process.env.CUTLINE_TEST_MODEL) {
         await contents.executeJavaScript(`(() => { const select=document.querySelector('[aria-label="Codex model"]'); select.value=${JSON.stringify(process.env.CUTLINE_TEST_MODEL)}; if (!select.value) throw new Error('Requested model missing'); select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
       }

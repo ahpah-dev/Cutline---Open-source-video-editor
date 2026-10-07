@@ -4,7 +4,7 @@ const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
 const path = require("node:path");
 const { CodexConnection, extractCodex, supportedCodexVersion, CODEX_VERSION } = require("../electron/codex.cjs");
-const TOOLS = ["get_project", "get_catalog", "apply_edits", "preview", "history", "open_export"].map((name) => ({ type: "function", name: "cutline_" + name, inputSchema: { type: "object", properties: {} } }));
+const TOOLS = ["get_project", "get_catalog", "apply_edits", "preview", "history", "open_export", "view_source", "analyze_audio"].map((name) => ({ type: "function", name: "cutline_" + name, inputSchema: { type: "object", properties: {} } }));
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 function fixture(modelPages = [{ data: [{ model: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", isDefault: true }] }]) {
   const requests = [], results = [], events = [], called = [];
@@ -133,4 +133,46 @@ test("Codex repeated pagination cursor fails instead of looping", async () => {
   const f = fixture([{ data: [], nextCursor: "1" }, { data: [], nextCursor: "1" }]);
   await assert.rejects(f.connection.connect(TOOLS), /repeated model-list page/);
   assert.equal(f.connection.state.connected, false);
+});
+
+test("Codex exposes advertised effort/modalities and updates effort on a reused thread", async () => {
+  const f = fixture([{ data: [{ model: "gpt-6.1-sol", isDefault: true, inputModalities: ["text", "image"], defaultReasoningEffort: "low", supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Fast" }, { reasoningEffort: "high", description: "Deeper" }, { reasoningEffort: "ultra", description: "Maximum" }] }] }]);
+  try {
+    const state = await f.connection.connect(TOOLS);
+    assert.deepEqual(state.models[0].reasoningEfforts.map(value => value.id), ["low", "high", "ultra"]);
+    assert.equal(state.models[0].defaultEffort, "low"); assert.deepEqual(state.models[0].inputModalities, ["text", "image"]);
+    await assert.rejects(f.connection.send("Edit", "project", undefined, "medium"), /does not support/);
+    assert.equal(f.connection.state.busy, false);
+    await f.connection.send("Edit", "project", undefined, "high");
+    assert.equal(f.requests.find(request => request.method === "turn/start").params.effort, "high");
+    assert.equal(f.requests.find(request => request.method === "thread/start").params.config.model_reasoning_effort, "high");
+    await f.connection.stop();
+    await f.connection.send("Again", "project");
+    const turns = f.requests.filter(request => request.method === "turn/start");
+    assert.equal(turns[1].params.effort, "low"); assert.equal(f.requests.filter(request => request.method === "thread/start").length, 1);
+  } finally { f.connection.disconnect(); }
+});
+
+test("Codex forwards bounded reference images, rejecting remote images and excessive attachments", async () => {
+  const f = fixture();
+  const reference = { name: "Reference.png", imageUrl: "data:image/png;base64,iVBORw0KGgo=" };
+  try {
+    await f.connection.connect(TOOLS);
+    for (const images of [[{ ...reference, imageUrl: "https://example.org/image.png" }], [{ ...reference, imageUrl: "file:///C:/private.png" }], [{ ...reference, imageUrl: "data:image/svg+xml;base64,AAAA" }], [{ ...reference, imageUrl: "data:image/png;base64,???" }], [{ ...reference, imageUrl: "data:image/png;base64," + "A".repeat(2000000) }], Array(4).fill(reference)]) await assert.rejects(f.connection.send("Edit", "project", undefined, undefined, images), /reference|image|Attach/i);
+    await f.connection.send("Use this look", "project", undefined, undefined, [reference]);
+    const turn = f.requests.find(request => request.method === "turn/start").params;
+    assert.equal(turn.effort, null); assert.deepEqual(turn.input.at(-1), { type: "image", url: reference.imageUrl });
+    assert.match(turn.input[1].text, /untrusted media/);
+    assert.match(f.requests.find(request => request.method === "thread/start").params.baseInstructions, /do NOT receive raw audio/);
+  } finally { f.connection.disconnect(); }
+});
+
+test("Codex does not fabricate effort or image support for text-only models", async () => {
+  const f = fixture([{ data: [{ model: "gpt-6-text", inputModalities: ["text"], supportedReasoningEfforts: [], isDefault: true }] }]);
+  try {
+    const state = await f.connection.connect(TOOLS); assert.deepEqual(state.models[0].reasoningEfforts, []);
+    await assert.rejects(f.connection.send("Edit", "project", undefined, "high"), /does not support/);
+    await assert.rejects(f.connection.send("Edit", "project", undefined, undefined, [{ name: "x", imageUrl: "data:image/png;base64,AAAA" }]), /does not accept images/);
+    assert.equal(f.requests.some(request => request.method === "thread/start"), false);
+  } finally { f.connection.disconnect(); }
 });

@@ -1,6 +1,20 @@
-# Cutline 0.8.0
+# Cutline 0.8.1
 
-A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files stay local; the optional assistant receives project metadata and preview frames it requests.
+A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files and raw audio stay local; the optional assistant receives project metadata, requested images, transcripts and audio-analysis results.
+
+## Codex reasoning, image access and free local audio analysis
+
+New in 0.8.1: the Codex composer includes **Reasoning effort**. Choose Auto (the selected model's advertised default) or a supported level. Options come from the signed-in account's model catalog, not a hard-coded list, and apply to each new turn, including an existing chat. Unsupported levels fall back to Auto when switching models. Higher effort can take longer and use more account usage; it does not enable shell access or unrelated tools.
+
+Use the image-attachment button for up to **three visual references** per message. Imported reference files stay outside the timeline unless you separately import them into Media. Local images under 25 MB are downsampled to at most 1024 px, preserving aspect ratio. Codex can request original imported image/video frames with `cutline_view_source` or the edited composite with `cutline_preview`; source video requests use original-file seconds, not timeline seconds. Media text is treated as untrusted content, not instructions.
+
+Expand **Media access** in the chat to control images and local analysis. Images/rhythm are enabled initially and can be disabled immediately. **Local Whisper speech analysis is off until you enable it**, authorizing a one-time model download when the assistant first requests speech. Tiny multilingual and English models work on CPU (~50–100 MB); Large v3 (~1 GB) uses the existing quantized WebGPU path and needs a compatible GPU. No paid audio provider or additional API key is needed. The Codex assistant itself still uses your account/plan.
+
+`cutline_analyze_audio` measures a selected audio/video clip in bounded **0.25–120 second windows**. Rhythm mode reports estimated BPM/confidence, onsets/beats, RMS/peak levels, clipping and silence intervals; no model download is needed. Speech mode runs Whisper locally and returns a transcript with timing. Offset is measured inside the trimmed, speed-adjusted clip; results include window, original-source and timeline seconds. Analysis is of the source before volume/fades/effects/mixing, not the final soundtrack. The tool does not automatically add captions or beat markers or modify the project. Cancellation, disconnect, project changes and permission revocation stop local workers; stale results are rejected.
+
+This is **speech/rhythm analysis, not native audio hearing**. The current Codex connection's models advertise text/image inputs, not raw audio. No raw audio is sent to Codex. Requested downsampled images, reference images, transcripts and timing/level statistics are shared through your account. Recognition and beat detection can make mistakes; they do not establish instruments, sound effects, speaker identity or music mood. Analysis requires readable audio in a browser-supported source format; reimport/re-encode unsupported media if decoding fails.
+
+![Codex reference images and reasoning controls](docs/screenshots/codex-media.png)
 
 ## Automatic beat detection and workspace themes
 
@@ -81,7 +95,7 @@ New in 0.4.2: video, image and text clips magnetically snap their visible center
 3. If prompted, click **Sign in to Codex** and finish the normal browser sign-in. No API key, npm, terminal commands or configuration files are needed.
 4. Describe your edit in the panel. For example: “Make a 15-second vertical edit using the imported clips. Add a centered gradient title with Letter Pop In, a slow zoom, and smooth dissolves between the cuts.” Select clips manually when you want to target them. Enter sends; Shift+Enter adds a new line.
 
-Codex works directly on the open timeline. Its editing tools expose exact item IDs, frame-aligned seconds, imported assets, installed fonts, preset names, text styling/gradients, clip transforms/color/audio, masks, chroma key, blend modes, stereo pan, animation stacks, Combo loops, effects, genuine two-sided transitions, splits, freeze frames, duplication/deletion, layer mute/hide/lock, and property keyframes. It can inspect rendered preview frames and open the regular export settings. Import and final save location remain under your control.
+Codex works directly on the open timeline. Its editing tools expose exact item IDs, frame-aligned seconds, imported assets, installed fonts, preset names, text styling/gradients, clip transforms/color/audio, masks, chroma key, blend modes, stereo pan, animation stacks, Combo loops, effects, genuine two-sided transitions, splits, freeze frames, duplication/deletion, layer mute/hide/lock, and property keyframes. It can inspect source images/video frames and rendered preview frames, request permitted local audio analysis, and open the regular export settings. Import and final save location remain under your control.
 
 Each validated batch commits together and undoes in one step. A project/revision check refuses stale edits after manual changes; pending tool calls are cancelled on Stop or Disconnect, and requests for a different open project are rejected. You can keep editing manually, close the panel to return to the inspector, switch models from the account's available list, or start a new chat. Chats are session-only, while timeline edits are autosaved normally. AI can make mistakes: review the result and use Undo or make a backup before a large edit.
 
@@ -91,7 +105,7 @@ The updated model picker discovers GPT-6.1 Sol, GPT-6 Astra, GPT-6 Sol and GPT-6
 
 ![A real Codex edit in the Cutline interface](docs/screenshots/codex-edit.png)
 
-The connection uses the official [Codex app-server protocol](https://developers.openai.com/codex/app-server) over a local stdio subprocess, not an editor API key or a remote control port. This ephemeral video-editing session disables shell/environment access, web search and unrelated MCP/app integrations without changing your Codex configuration. Original imported media is not uploaded automatically; project text/settings/metadata and requested rendered preview frames are sent through Codex. This feature is optional and needs internet, an eligible Codex account, and available account usage; Cutline itself remains free. If your existing Codex CLI sign-in uses an API key instead of ChatGPT, its normal API usage charges apply; the composer displays a notice. The browser editor cannot launch this local connection.
+The connection uses the official [Codex app-server protocol](https://developers.openai.com/codex/app-server) over a local stdio subprocess, not an editor API key or a remote control port. This ephemeral video-editing session disables shell/environment access, web search and unrelated MCP/app integrations without changing your Codex configuration. Original imported media and raw audio are not uploaded automatically; project text/settings/metadata, requested downsampled source/preview images, attached references and permitted local transcripts/audio statistics are sent through Codex. Disabling media access stops future media requests; it cannot retract information already sent in the chat. This feature is optional and needs internet, an eligible Codex account, and available account usage; Cutline itself remains free. If your existing Codex CLI sign-in uses an API key instead of ChatGPT, its normal API usage charges apply; the composer displays a notice. The browser editor cannot launch this local connection.
 
 ## Editing
 
@@ -125,7 +139,7 @@ Whisper Large v3 is the default auto-subtitle model, with Tiny options for CPU-o
 
 ## Development
 
-Node.js >=22.13.0 and npm are required.
+Node.js >=22.13.0 and npm are required. The web build was verified on Node 24.19.0 on Windows. On this host, Node 26.5.0 intermittently aborted with a libuv shutdown assertion after completing the web build; the same build and server-render check completed normally on Node 24.19.0. This is a development-tooling issue, not a packaged Windows startup failure.
 
 ```sh
 npm install
@@ -140,7 +154,11 @@ npm run desktop:dist
 
 `test:unit` runs model/history, isolated React timeline, compositing/coordinate and atomic Codex editing tests, plus mocked app-server protocol tests. `test:engine` tests actual Canvas rendering, mask controls and keyframe drags, blend/transition endpoints, feather boundaries, chroma key, IndexedDB preservation, all available encoders, masked encoded output, stereo audio, cancellation, duplicate source playback, and the live Editor's Codex tool bridge in an isolated Electron profile. `npm test` also builds and checks the server-rendered shell. Tests never use the user's normal project profile. An optional production integration test, `CUTLINE_LIVE_CODEX=1 electron tests/codex-desktop-live.cjs`, uses the installed Codex sign-in and account usage for one synthetic edit, preview and undo; do not run it as a routine offline test.
 
+The 0.8.1 checks add model-supported effort forwarding/default reset, image-input limits and text-only model rejection, measured audio levels, bounded trim/speed/time mappings and strict media tool validation. `electron tests/codex-media-desktop.cjs` runs the real production Windows UI, preload/IPC bridge and local workers with a test-only Codex transport: original image bounds, distinct decoded video frames, reference downsampling and forwarding, rhythmic audio analysis, unchanged project revisions, permission refusal/revocation, stop cancellation and small-window composer geometry. It does not claim AI inference was performed. The real account connection/catalog is separately checked without sending an inference request. For optional real local speech verification, generate a synthetic WAV with `tests/codex-speech-fixture.ps1`, then set `CUTLINE_SPEECH_TEST=1` for the media test; this explicitly downloads/caches free Tiny in the isolated test profile and checks a nonempty timestamped transcript. Large v3 GPU inference is not separately exercised by these checks.
+
 ## Verification for this release
+
+For 0.8.1, all 88 unit/component/protocol checks and 73 render/export checks pass (161 total), plus the server-rendered shell check, type checking and scoped lint. New production media/permission/composer checks and real Tiny speech transcription pass against both the desktop build and packaged app archive. Run real-time export checks without concurrent CPU-heavy builds/transcription; under load, recording duration/frame timing can drift and tests can time out. The assistant cancels its local media workers when user import/export/subtitle work begins. These checks do not certify all devices/codecs or semantic AI accuracy.
 
 The 0.8.0 update passes 155 model/component/protocol and rendering/export checks, including spectral timing at 80/120/160 BPM, silence/steady-tone rejection, beat density/offset/sensitivity, frame-aligned guide migration and atomic undo, plus cold text-font loading. Production Windows checks exercise real audio decoding and the shipped beat worker, marker preservation/undo/cancellation, four distinct topbar/panel palettes, persisted theme reload and minimum-window geometry. The same beat/theme workflow and Manrope inspector-to-render check are repeated against the packaged app archive. Results remain music- and device-dependent; these tests are not a guarantee of perfect detection or flawless editing.
 

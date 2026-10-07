@@ -95,3 +95,22 @@ input[type="range"]::-webkit-slider-thumb {background:var(--mint)}
 .beat-dialog-actions {position:sticky;bottom:-24px;z-index:1;background:var(--panel);display:flex;justify-content:flex-end;gap:10px;border-top:1px solid var(--line);padding:14px 0;margin-top:18px;box-shadow:0 -12px 16px var(--panel)}
 @media(max-width:1250px){.theme-picker>summary>span{display:none}.theme-picker>summary{padding:8px}.timeline-toolbar .tool-group{gap:2px}.timeline-toolbar button{gap:4px}}
 @media(max-width:600px){.beat-stats{grid-template-columns:1fr}.beat-settings{grid-template-columns:1fr}.beat-dialog{padding:18px}}
+.codex-media-access {margin:0 0 18px;padding:0 0 12px;border-bottom:1px solid var(--line);color:var(--text);font-size:11px}
+.codex-media-access summary {cursor:pointer;font-weight:600;display:flex;justify-content:space-between;gap:8px;list-style:revert}
+.codex-media-access summary span {font-size:10px;color:var(--muted);font-weight:400}
+.codex-media-access label {display:flex;align-items:center;gap:7px;margin-top:12px;line-height:1.5}
+.codex-media-access input {accent-color:var(--mint);flex-shrink:0}
+.codex-media-access p {font-size:10px;line-height:1.6;color:var(--muted);margin:7px 0}
+.codex-media-access select {width:100%;padding:7px;border:1px solid var(--line);border-radius:6px;background:var(--panel-raised);color:var(--text);font-size:10px}
+.codex-effort {display:flex;align-items:center;justify-content:space-between;padding:0 10px 10px;gap:12px;color:var(--muted);font-size:10px}
+.codex-effort select {flex:1;max-width:170px}
+.codex-reference-list {display:flex;gap:7px;flex-wrap:wrap;margin:8px 0}
+.codex-reference-list.pending {padding:0 10px}
+.codex-reference-list figure {margin:0;position:relative;min-width:0;width:64px}
+.codex-reference-list img {width:64px;height:48px;object-fit:contain;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+.codex-reference-list figcaption {font-size:8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted)}
+.codex-reference-list button {position:absolute;right:-3px;top:-3px;background:var(--panel-raised);color:var(--text);border:1px solid var(--line);border-radius:50%;width:18px;height:18px;display:grid;place-items:center;padding:0}
+.codex-attachment-error {color:var(--danger,#f48d9d);font-size:10px;padding:0 10px}
+.codex-composer-tools > select {flex:1}
+.codex-composer textarea {color:var(--text)}
+.codex-composer select {background:var(--panel-raised);color:var(--text);border-color:var(--line)}

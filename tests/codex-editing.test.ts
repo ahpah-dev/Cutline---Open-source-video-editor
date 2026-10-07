@@ -75,7 +75,7 @@ test("Codex enforces item-specific properties and normalizes frame timing", () =
   p.clips = [makeClip(p.assets[0])];
   assert.throws(() => edit(p, [{ op: "animation", id: p.clips[0].id, phase: "Entrance", duration: 1, layers: [{ name: "Letter Pop In" }] }]), /text animation/);
   assert.throws(() => edit(p, [{ op: "keyframe", id: p.texts[0].id, property: "text", value: "bad", at: 0 }]), /cannot be keyframed/);
-  assert.equal(CODEX_TOOLS.length, 6);
+  assert.equal(CODEX_TOOLS.length, 8);
 });
 test("Codex accepts simple flat styling while preserving strict validation", () => {
   const p = newProject();

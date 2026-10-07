@@ -1348,7 +1348,7 @@ export default function Editor() {
         const clip=project.clips.find(c=>c.id===clipId);
         if(!clip||beatSourceKey(project,clip)!==key){notify("Source timing changed. Reanalyze the audio first.");return;}
         edit(p=>applyBeatMarkers(p,clipId,times,bpm,replace));setBeatsOpen(false);notify("Beat markers added. Undo removes this batch.");
-      }}/>
+      }}/>}
       <input
         hidden
         type="file"

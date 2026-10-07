@@ -1,4 +1,4 @@
-import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "./editor/codexTypes";
+import type { CodexEvent, CodexImage, CodexStatus, CodexToolRequest, CodexToolResult } from "./editor/codexTypes";
 
 declare global {
   interface Window {
@@ -9,7 +9,7 @@ declare global {
       codexConnect: (tools: unknown[]) => Promise<CodexStatus>;
       codexStatus: () => Promise<CodexStatus>;
       codexLogin: () => Promise<void>;
-      codexSend: (prompt: string, projectId: string, model?: string) => Promise<{ threadId: string }>;
+      codexSend: (prompt: string, projectId: string, model?: string, effort?:string, images?:CodexImage[]) => Promise<{ threadId: string }>;
       codexStop: () => Promise<void>;
       codexReset: () => Promise<void>;
       codexDisconnect: () => Promise<void>;
