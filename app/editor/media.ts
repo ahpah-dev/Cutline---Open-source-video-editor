@@ -530,6 +530,17 @@ export async function exportProject(
     ]);
     pool.pause();
     onProgress(1, "Finishing video");
+    // Canvas capture is asynchronous. Give the final requested frame a chance
+    // to reach the recorder before stopping, including text-only/silent edits.
+    videoTrack.requestFrame?.();
+    let finalFrameTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => { finalFrameTimer = setTimeout(resolve, Math.max(50, 2000 / options.fps)); }),
+        abortPromise,
+      ]);
+    } finally { clearTimeout(finalFrameTimer); }
+    check();
     recorder.stop();
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
     try {

@@ -27,7 +27,7 @@ app.whenReady().then(async () => {
   assert.ok(checks.images && checks.fonts && checks.keyboardTab && checks.modal && checks.close && checks.sceneModal && checks.faq);
   assert.equal(checks.tabs.length, 7); assert.ok(checks.tabs.every(t => t.selected && t.label));
   assert.equal(checks.downloads.length, 3);
-  assert.ok(checks.downloads.every(url => url.startsWith('https://github.com/ahpah-dev/Cutline---Open-source-video-editor/releases/download/v0.8.2/') && url.includes('0.8.2-x64.exe')));
+  assert.ok(checks.downloads.every(url => url.startsWith('https://github.com/ahpah-dev/Cutline---Open-source-video-editor/releases/download/v0.8.3/') && url.includes('0.8.3-x64.exe')));
   await fs.mkdir('work/website-qa', { recursive: true });
   for (const [name, width, height, zoom] of [['desktop',1440,1050,1],['mobile',390,844,1],['text-zoom',980,1000,2]]) {
     win.setContentSize(width,height); win.webContents.setZoomFactor(zoom);

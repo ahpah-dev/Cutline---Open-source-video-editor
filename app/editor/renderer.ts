@@ -13,7 +13,8 @@ import {
   type TextClip,
 } from "./model";
 import { FILTERS } from "./presets";
-import { letterPopProgress, textMotion } from "./textAnimation";
+import { textMotion } from "./textAnimation";
+import { segmentTextUnits, sequenceRanks, sequenceUnitMotion } from "./textSequence";
 import { normalizeCrop } from "./crop";
 import { textFont } from "./textFonts";
 import { applyExpandedEffect } from "./expandedEffects";
@@ -829,7 +830,7 @@ export class Renderer {
     const rotation = t.rotation + motion.rotation,
       alpha = motion.opacity;
     const chars = Array.from(t.text);
-    const text = chars
+    const text = motion.sequences.length ? t.text : chars
       .slice(0, Math.ceil(chars.length * motion.characters))
       .join("");
     const size = t.fontSize * unit;
@@ -916,42 +917,50 @@ export class Renderer {
     ctx.shadowColor = t.shadowColor;
     ctx.shadowBlur = t.shadowBlur * unit;
     ctx.shadowOffsetX = ctx.shadowOffsetY = t.shadowOffset * unit;
-    const letterAnimation = motion.letterPop < 1;
-    const animatedLetters = lines.map((line) => Array.from(line));
-    const letterCount = animatedLetters.reduce((total, line) => total + line.length, 0);
-    let letterIndex = 0;
+    const sequences = motion.sequences.filter(layer => layer.progress < 1).map(layer => {
+      const units = segmentTextUnits(t.text, layer.settings.unit);
+      return { layer, units, ranks: sequenceRanks(units.length, layer.settings.order, layer.settings.seed) };
+    });
     lines.forEach((line, i) => {
       const ly = (i - (fullLines.length - 1) / 2) * size * t.lineHeight;
-      if (!letterAnimation || letterCount === 0) {
+      if (!sequences.length || !line.length) {
         if (t.strokeWidth) ctx.strokeText(line, 0, ly);
         ctx.fillText(line, 0, ly);
         return;
       }
-      const glyphs = animatedLetters[i];
-      const spacing = t.letterSpacing * unit;
-      ctx.letterSpacing = "0px";
-      const widths = glyphs.map((glyph) => ctx.measureText(glyph).width);
-      const lineWidth = widths.reduce((total, width) => total + width, 0) + spacing * Math.max(0, glyphs.length - 1);
-      let cursor = t.align === "center" ? -lineWidth / 2 : t.align === "right" ? -lineWidth : 0;
-      glyphs.forEach((glyph, index) => {
-        const width = widths[index];
-        const letterProgress = letterPopProgress(motion.letterPop, letterIndex++, letterCount);
-        if (letterProgress > 0) {
-          const eased = 1 - (1 - letterProgress) ** 3;
-          const scale = 0.14 + 0.86 * eased + Math.sin(letterProgress * Math.PI) * 0.14;
-          const centerX = cursor + width / 2;
-          ctx.save();
-          ctx.globalAlpha = alpha * eased;
-          ctx.textAlign = "left";
-          ctx.translate(centerX, ly);
-          ctx.scale(scale, scale);
-          ctx.translate(-centerX, -ly);
-          if (t.strokeWidth) ctx.strokeText(glyph, cursor, ly);
-          ctx.fillText(glyph, cursor, ly);
-          ctx.restore();
+      const lineWidth = ctx.measureText(line).width;
+      const lineLeft = t.align === "center" ? -lineWidth / 2 : t.align === "right" ? -lineWidth : 0;
+      const plans = sequences.map(sequence => ({ ...sequence, groups: sequence.units.filter(group => group.line === i) }));
+      const cuts = [...new Set([0, line.length, ...plans.flatMap(plan => plan.groups.flatMap(group => [group.start, group.end]))])].sort((a, b) => a - b);
+      const positions = new Map(cuts.map(cut => [cut, lineLeft + (cut ? ctx.measureText(line.slice(0, cut)).width : 0)]));
+      const inkPad = (t.strokeWidth * 2 + t.shadowBlur * 2 + Math.abs(t.shadowOffset) + 8) * unit;
+      for (let atom = 0; atom < cuts.length - 1; atom++) {
+        const start = cuts[atom], end = cuts[atom + 1];
+        if (!/\S/u.test(line.slice(start, end))) continue;
+        let unitOpacity = 1, unitBlur = blur;
+        ctx.save();
+        for (const plan of plans) {
+          const group = plan.groups.find(group => group.start <= start && group.end >= end);
+          if (!group) continue;
+          const part = sequenceUnitMotion(plan.layer, plan.ranks[group.index], plan.units.length);
+          unitOpacity *= part.opacity; unitBlur += part.blur * w;
+          const pivot = (positions.get(group.start)! + positions.get(group.end)!) / 2;
+          ctx.translate(part.x * w, part.y * h);
+          ctx.translate(pivot, ly); ctx.rotate(rad(part.rotation)); ctx.scale(part.scaleX, part.scaleY); ctx.translate(-pivot, -ly);
         }
-        cursor += width + spacing;
-      });
+        if (unitOpacity > 0) {
+          ctx.globalAlpha = alpha * unitOpacity;
+          if (unitBlur > 0) ctx.filter = `blur(${unitBlur}px)`;
+          const from = positions.get(start)! - (start === 0 ? inkPad : 0);
+          const to = positions.get(end)! + (end === line.length ? inkPad : 0);
+          ctx.beginPath(); ctx.rect(from, ly - size * 3 - inkPad, Math.max(0, to - from), size * 6 + inkPad * 2); ctx.clip();
+          // Clip the correctly shaped FULL line instead of retyping isolated glyphs:
+          // kerning, ligatures, combining accents, emoji and gradients keep their layout.
+          if (t.strokeWidth) ctx.strokeText(line, 0, ly);
+          ctx.fillText(line, 0, ly);
+        }
+        ctx.restore();
+      }
     });
     ctx.restore();
     const centerOffset = left + tw / 2;

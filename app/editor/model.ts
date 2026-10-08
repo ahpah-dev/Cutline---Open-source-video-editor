@@ -105,6 +105,14 @@ export type AnimationName =
   | "Wipe down"
   | "Typewriter"
   | "Letter Pop In"
+  | "Letter Fade"
+  | "Letter Slide"
+  | "Letter Blur"
+  | "Letter Spin"
+  | "Letter Bounce"
+  | "Letter Flip"
+  | "Word Pop"
+  | "Line Slide"
   | "Drift"
   | "Custom";
 export const COMBO_ANIMATIONS = [
@@ -161,7 +169,17 @@ export type TextAnimationOptions = {
   rotation?: number;
   blur?: number;
   fade?: boolean;
-  easing?: "ease-out" | "ease-in-out" | "linear" | "ease-in";
+  easing?: "ease-out" | "ease-in-out" | "linear" | "ease-in" | "back" | "spring";
+  /** Delay and active span are fractions of this entrance/exit phase. */
+  delay?: number;
+  span?: number;
+  unit?: "letter" | "word" | "line";
+  order?: "forward" | "reverse" | "center-out" | "edges-in" | "random";
+  /** Fraction of active time reserved for spacing the units' start times. */
+  stagger?: number;
+  overshoot?: number;
+  flipAxis?: "horizontal" | "vertical";
+  seed?: number;
 };
 export type AnimationLayer = { name: AnimationName; settings: TextAnimationOptions };
 export type Asset = {

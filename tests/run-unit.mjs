@@ -17,6 +17,7 @@ await build({
         beats: "tests/beat-detection.test.ts",
         codexMedia: "tests/codex-media.test.ts",
         scenes: "tests/scene-detection.test.ts",
+        textSequence: "tests/text-sequence.test.ts",
       },
       formats: ["es"],
       fileName: (_format, name) => name + ".js",
@@ -31,7 +32,7 @@ await build({
 });
 const result = spawnSync(
   process.execPath,
-  ["--test", "work/unit-tests/model.js", "work/unit-tests/timeline.js", "work/unit-tests/codex.js", "work/unit-tests/compositing.js", "work/unit-tests/effects.js", "work/unit-tests/color.js", "work/unit-tests/beats.js", "work/unit-tests/codexMedia.js", "work/unit-tests/scenes.js"],
+  ["--test", "work/unit-tests/model.js", "work/unit-tests/timeline.js", "work/unit-tests/codex.js", "work/unit-tests/compositing.js", "work/unit-tests/effects.js", "work/unit-tests/color.js", "work/unit-tests/beats.js", "work/unit-tests/codexMedia.js", "work/unit-tests/scenes.js", "work/unit-tests/textSequence.js"],
   { stdio: "inherit", env: { ...process.env, NODE_ENV: "test" } },
 );
 process.exitCode = result.status ?? 1;

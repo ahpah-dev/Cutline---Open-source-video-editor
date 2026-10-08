@@ -13,7 +13,7 @@ export type CustomAnimationPreset = {
 };
 
 const STORAGE_KEY = "cutline:custom-animation-presets:v1";
-const easing = ["ease-out", "ease-in-out", "linear", "ease-in"];
+const easing = ["ease-out", "ease-in-out", "linear", "ease-in", "back", "spring"];
 export function sanitizeAnimationSettings(input: unknown): TextAnimationOptions {
   if (!input || typeof input !== "object") return {};
   const source = input as Record<string, unknown>;
@@ -21,12 +21,17 @@ export function sanitizeAnimationSettings(input: unknown): TextAnimationOptions 
   for (const [name, min, max] of [
     ["angle", -360, 360], ["distance", 0, 1], ["zoomAmount", 0, 2],
     ["rotation", -720, 720], ["blur", 0, 0.1],
+    ["delay", 0, 0.95], ["span", 0.01, 1], ["stagger", 0, 0.95], ["overshoot", 0, 1], ["seed", 0, 9999],
   ] as const) {
     if (typeof source[name] === "number" && Number.isFinite(source[name])) result[name] = clamp(source[name], min, max);
   }
   if (source.zoomDirection === "in" || source.zoomDirection === "out") result.zoomDirection = source.zoomDirection;
   if (typeof source.fade === "boolean") result.fade = source.fade;
   if (typeof source.easing === "string" && easing.includes(source.easing)) result.easing = source.easing as TextAnimationOptions["easing"];
+  if (["letter", "word", "line"].includes(String(source.unit))) result.unit = source.unit as TextAnimationOptions["unit"];
+  if (["forward", "reverse", "center-out", "edges-in", "random"].includes(String(source.order))) result.order = source.order as TextAnimationOptions["order"];
+  if (source.flipAxis === "horizontal" || source.flipAxis === "vertical") result.flipAxis = source.flipAxis;
+  if (result.seed !== undefined) result.seed = Math.round(result.seed);
   return result;
 }
 function sanitizeLayers(input: unknown): AnimationLayer[] {

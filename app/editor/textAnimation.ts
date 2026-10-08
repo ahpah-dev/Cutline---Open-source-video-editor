@@ -1,4 +1,6 @@
 import { clamp, clipDuration, type AnimationLayer, type AnimationName, type Clip, type ComboAnimation, type TextAnimationOptions, type TextClip } from "./model";
+import { easeAnimation, isTextSequenceAnimation, layerProgress, sequenceDefaults, type TextSequenceLayer } from "./textSequence";
+import { sanitizeAnimationSettings } from "./customAnimationPresets";
 type AnimationTarget = Clip | TextClip;
 const durationOf = (item: AnimationTarget) => "sourceEnd" in item ? clipDuration(item) : item.duration;
 export function letterPopProgress(progress: number, index: number, count: number) {
@@ -15,6 +17,7 @@ export type TextMotion = {
   blur: number;
   characters: number;
   letterPop: number;
+  sequences: TextSequenceLayer[];
   reveals: { direction: string; amount: number }[];
 };
 export function animationLayers(t: AnimationTarget, phase: "Entrance" | "Exit"): AnimationLayer[] {
@@ -25,6 +28,7 @@ export function animationLayers(t: AnimationTarget, phase: "Entrance" | "Exit"):
   return [{ name, settings: (phase === "Entrance" ? t.animationSettings : t.exitAnimationSettings) ?? {} }];
 }
 export function defaultAnimationSettings(name: AnimationName, phase: "Entrance" | "Exit"): TextAnimationOptions {
+  if (isTextSequenceAnimation(name)) return { ...sequenceDefaults(name), zoomDirection: phase === "Exit" ? "out" : "in", delay: 0, span: 1 };
   const exiting = phase === "Exit";
   const angle = name === "Rise" || name === "Bounce" ? (exiting ? 270 : 90)
     : name === "Drop" ? (exiting ? 90 : 270)
@@ -71,12 +75,10 @@ function pose(
   progress: number,
   exiting: boolean,
   options: TextAnimationOptions = {},
+  textTarget = false,
 ): TextMotion {
   const p = clamp(progress, 0, 1),
-    ease = options.easing === "linear" ? p
-      : options.easing === "ease-in" ? p ** 3
-      : options.easing === "ease-in-out" ? p * p * (3 - 2 * p)
-      : 1 - (1 - p) ** 3,
+    ease = easeAnimation(p, options.easing),
     hidden = 1 - ease;
   const drift = (angle: number, distance: number) => ({
     x: Math.cos(angle * Math.PI / 180) * distance * hidden,
@@ -96,10 +98,17 @@ function pose(
     blur: 0,
     characters: 1,
     letterPop: 1,
+    sequences: [],
     reveals: [],
   };
   if (name === "None") return m;
-  m.opacity = options.fade === false ? 1 : options.easing ? ease : p;
+  if (textTarget && isTextSequenceAnimation(name)) {
+    m.sequences = [{ name, progress: p, exiting, settings: { ...sequenceDefaults(name), zoomDirection: exiting ? "out" : "in", ...options } }];
+    if (name === "Typewriter") m.characters = p;
+    if (name === "Letter Pop In") m.letterPop = p;
+    return m;
+  }
+  m.opacity = options.fade === false ? 1 : clamp(options.easing ? ease : p, 0, 1);
   switch (name) {
     case "Rise":
       Object.assign(m, drift(options.angle ?? (exiting ? 270 : 90), options.distance ?? 0.1));
@@ -151,7 +160,7 @@ function pose(
       m.blur = hidden * (options.blur ?? 0.018);
       break;
     case "Typewriter":
-      m.characters = options.easing ? ease : p;
+      m.characters = clamp(options.easing ? ease : p, 0, 1);
       m.opacity = 1;
       break;
     case "Letter Pop In":
@@ -196,7 +205,8 @@ export function textMotion(t: AnimationTarget, time: number, includeItemOpacity 
   const progress = entering ? local / entranceDuration : leaving ? (duration - local) / exitDuration : 1;
   const m = pose("None", 1, false);
   if (phase) for (const layer of animationLayers(t, phase)) {
-    const part = pose(layer.name, progress, phase === "Exit", layer.settings);
+    const settings = sanitizeAnimationSettings(layer.settings);
+    const part = pose(layer.name, layerProgress(progress, phase === "Exit", settings), phase === "Exit", settings, "text" in t);
     m.x += part.x;
     m.y += part.y;
     m.scaleX *= part.scaleX;
@@ -206,6 +216,7 @@ export function textMotion(t: AnimationTarget, time: number, includeItemOpacity 
     m.blur += part.blur;
     m.characters = Math.min(m.characters, part.characters);
     m.letterPop = Math.min(m.letterPop, part.letterPop);
+    m.sequences.push(...part.sequences);
     m.reveals.push(...part.reveals);
   }
   const combo = comboMotion(t, time);

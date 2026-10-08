@@ -135,3 +135,9 @@ input[type="range"]::-webkit-slider-thumb {background:var(--mint)}
 .scene-cut-preview:hover {border-color:var(--mint)}
 .scene-output {margin-top:14px}
 @media(max-width:600px){.scene-cut{grid-template-columns:1fr 100px 100px;gap:7px;padding:8px}}
+.animation-search { display: flex; align-items: center; gap: 6px; margin: 0 0 14px; }
+.animation-search input { min-width: 0; flex: 1; }
+.animation-search button { padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-raised); color: var(--muted); }
+.text-sequence-controls { border-block: 1px solid var(--line); padding: 16px 0 4px; margin: 12px 0 17px; }
+.animation-reset { margin: 6px 0 12px; font-size: 11px; }
+.animation-choice-grid { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; padding: 2px 4px 2px 2px; scrollbar-width: thin; }

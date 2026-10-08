@@ -9,6 +9,7 @@ import {
 import { ANIMATIONS, EFFECTS, FILTERS, FONTS, TEXT_PRESETS, TRANSITIONS } from "./presets";
 import { pruneEffectKeyframes } from "./effectStack";
 import { defaultAnimationSettings } from "./textAnimation";
+import { TEXT_SEQUENCE_ANIMATIONS } from "./textSequence";
 
 type Schema = {
   type?: string; properties?: Record<string, Schema>; required?: string[]; additionalProperties?: boolean;
@@ -82,7 +83,11 @@ const animationSettings = object({
   angle: number(-360, 360), distance: number(0, 1), zoomAmount: number(0, 2),
   zoomDirection: choices(["in", "out"]), rotation: number(-720, 720),
   blur: number(0, 0.1), fade: boolean,
-  easing: choices(["ease-out", "ease-in-out", "linear", "ease-in"]),
+  easing: choices(["ease-out", "ease-in-out", "linear", "ease-in", "back", "spring"]),
+  delay: number(0, 0.95, "Fraction of this phase before this layer starts."), span: number(0.01, 1, "Active fraction of the phase, clamped to time remaining after delay."),
+  unit: choices(["letter", "word", "line"]), order: choices(["forward", "reverse", "center-out", "edges-in", "random"]),
+  stagger: number(0, 0.95, "Fraction of active duration used to distribute unit starts; 0 animates together."),
+  overshoot: number(0, 1), flipAxis: choices(["horizontal", "vertical"]), seed: integer(0, 9999, "Deterministic shuffle seed."),
 });
 const operation = (op: string, properties: Record<string, Schema>, required: string[] = []) =>
   object({ op: { const: op }, ...properties }, ["op", ...required]);
@@ -171,6 +176,8 @@ export function editingCatalog(fonts = FONTS) {
     rules: ["Use get_project immediately before apply_edits.", "Existing project markers identify user-marked song beats and important moments; preserve and use their kind and time as timing guides when planning edits and animations.", "Use exact IDs, or @ref for creations earlier in a batch.", "For add_text, add_clip and update, styling properties can be placed directly on the operation. A nested patch is also accepted; direct properties win.", "All operations in a batch commit together and undo together.", "A transition attaches to an incoming visual clip touching a preceding clip on the same track. Duration is at most 3 seconds and cannot exceed either clip length.", "Freeze inserts a held frame inside a video and shifts subsequent items on that layer by its duration.", "Overlapping visuals on the same track use the later-starting clip; use different tracks for overlays.", "Gradient stops can be keyframed with gradientStop:STOP_ID:color or gradientStop:STOP_ID:position.", "Only already imported assets can be inserted. Ask the user to import missing media.", "No shell commands, source-code edits, downloads, or filesystem access are needed to edit the video."],
     examples: [{ op: "add_text", ref: "title", text: "Hello", start: 0, duration: 3, track: 1, x: 0.5, y: 0.5, fontSize: 96, color: "#ffffff" }, { op: "animation", id: "@title", phase: "Entrance", duration: 0.6, layers: [{ name: "Letter Pop In" }] }, { op: "update", id: "EXACT_ITEM_ID", opacity: 0.75 }],
     textPresets: TEXT_PRESETS.map((preset) => preset.name), animations: ANIMATIONS,
+    animationSettings, textOnlyAnimations: TEXT_SEQUENCE_ANIMATIONS,
+    animationTiming: "Entrance/Exit duration is seconds for the entire phase. Layer delay/span and text stagger use fractions, not seconds. Text sequences support letters (Unicode graphemes), whitespace-separated words or lines; order describes both appearance and disappearance. Shuffle is deterministic by seed. For long titles adjacent units are batched for performance. Fine tuning is stored in each stack layer; image/video clips cannot use text-only animations.",
     comboAnimations: COMBO_ANIMATIONS, effects: EFFECTS.map((effect) => effect.name), masks: MASK_SHAPES, blendModes: BLEND_MODES,
     transitions: TRANSITIONS.map((transition) => transition.name), filters: FILTERS.map((filter) => filter.name),
     colorGrading: { ranges: GRADE_RANGES, units: "Exposure is display-referred stops. Wheel hue uses degrees and strength 0–100; tonal/luminance/tint controls use −100–100. Curves use 0–1 input/output points, up to 12 per channel. Scalar controls support keyframes. gradingEnabled bypasses all color controls and look, but not effects/chroma/masks. This is 8-bit sRGB/Rec.709 grading, not scene-linear HDR/RAW." },
@@ -296,7 +303,8 @@ export function applyCodexEdits(project: Project, input: unknown) {
           next = setJoinTransition(next, item.id, op.name as Clip["transition"]);
         } else if (op.op === "animation") {
           const layers = (op.layers as NonNullable<TextClip["animationStack"]>).map((layer) => ({ ...layer, settings: { ...defaultAnimationSettings(layer.name, op.phase as "Entrance" | "Exit"), ...layer.settings } }));
-          if ("sourceEnd" in item && layers.some((layer) => layer.name === "Letter Pop In")) throw new Error("Letter Pop In is a text animation.");
+          const textOnly = layers.find(layer => (TEXT_SEQUENCE_ANIMATIONS as readonly string[]).includes(layer.name));
+          if ("sourceEnd" in item && textOnly) throw new Error(`${textOnly.name} is a text animation.`);
           const entrance = op.phase === "Entrance";
           replace({ ...item, ...(entrance ? { animationStack: layers, animation: layers[0]?.name ?? "None", animationDuration: op.duration as number, animationPresetName: undefined } : { exitAnimationStack: layers, exitAnimation: layers[0]?.name ?? "None", exitAnimationDuration: op.duration as number, exitAnimationPresetName: undefined }) });
         } else if (op.op === "combo") {

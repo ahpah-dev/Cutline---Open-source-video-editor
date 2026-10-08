@@ -41,6 +41,7 @@ import {
   EFFECTS,
 } from "./presets";
 import { animationLayers, defaultAnimationSettings, textAnimationTiming } from "./textAnimation";
+import { isTextSequenceAnimation, TEXT_SEQUENCE_ANIMATIONS } from "./textSequence";
 import {
   createCustomAnimationPreset,
   readCustomAnimationPresets,
@@ -96,6 +97,7 @@ export function Inspector({
     "Entrance",
   );
   const [selectedAnimationName, setSelectedAnimationName] = useState<string | null>(null);
+  const [animationSearch, setAnimationSearch] = useState("");
   const [selectedComboName, setSelectedComboName] = useState<ComboAnimationName | null>(null);
   const [customPresets, setCustomPresets] = useState<CustomAnimationPreset[]>(readCustomAnimationPresets);
   const [newPresetName, setNewPresetName] = useState("");
@@ -263,16 +265,22 @@ export function Inspector({
   const phaseSettings = selectedLayer?.settings ?? {};
   const phaseDefaults = animationPhase === "Combo" ? {} : defaultAnimationSettings(phaseBase, animationPhase);
   const phaseOptions = { ...phaseDefaults, ...phaseSettings };
+  const availableAnimations = ANIMATIONS.filter(name =>
+    (text || !(TEXT_SEQUENCE_ANIMATIONS as readonly string[]).includes(name)) &&
+    `${name} ${name === "Letter Pop In" ? "Letter Pop Out" : name === "Typewriter" ? "Erase" : ""}`.toLowerCase().includes(animationSearch.trim().toLowerCase()));
   const comboStack = animationItem?.comboAnimations ?? [];
   const selectedCombo = comboStack.find((layer) => layer.name === selectedComboName) ?? comboStack[0];
   const phaseDuration = animationItem && (animationPhase === "Entrance" ? animationItem.animationDuration : animationItem.exitAnimationDuration) || 0.5;
   const activePresetName = animationItem && animationPhase !== "Combo" ? (animationPhase === "Entrance" ? animationItem.animationPresetName : animationItem.exitAnimationPresetName) : undefined;
+  const compatiblePresets = customPresets.filter(preset => text || !(preset.layers ?? [{ name: preset.base }]).some(layer => (TEXT_SEQUENCE_ANIMATIONS as readonly string[]).includes(layer.name)));
   const updateAnimationItem = (patch: Partial<Clip> & Partial<TextClip>) => {
     if (text) updateText(patch);
     else if (clip) updateClip(patch);
   };
   const setAnimationStack = (layers: AnimationLayer[], presetName?: string, duration?: number) => {
     if (animationPhase === "Combo") return;
+    if (layers.length > 20 && layers.length >= phaseStack.length) { setPresetError("A phase can hold up to 20 animations. Remove a layer before adding this preset."); return; }
+    setPresetError("");
     const first = layers[0];
     const patch = {
       animation: first?.name ?? "None",
@@ -298,6 +306,7 @@ export function Inspector({
     if (animationPhase === "Combo") return;
     if (name === "None") { setAnimationStack([]); setSelectedAnimationName(null); return; }
     const exists = phaseStack.some((layer) => layer.name === name);
+    if (!exists && phaseStack.length >= 20) return;
     setAnimationStack(exists ? phaseStack.filter((layer) => layer.name !== name)
       : [...phaseStack, { name, settings: {} }]);
     setSelectedAnimationName(exists ? null : name);
@@ -314,6 +323,7 @@ export function Inspector({
     updateAnimationItem({ comboAnimations: comboStack.map((layer) => layer.name === selectedCombo.name ? { ...layer, ...patch } : layer) });
   };
   const applyCustomPreset = (preset: CustomAnimationPreset, append = false) => {
+    if (!compatiblePresets.some(candidate => candidate.id === preset.id)) { setPresetError("This preset needs a text clip."); return; }
     const incoming = (preset.layers ?? [{ name: preset.base, settings: preset.settings }])
       .map((layer) => ({ name: layer.name, settings: { ...layer.settings } }));
     const layers = append ? [...phaseStack, ...incoming.filter((layer) => !phaseStack.some((current) => current.name === layer.name))] : incoming;
@@ -825,13 +835,15 @@ export function Inspector({
                     </button>
                   ))}
                 </div>
+                {animationPhase !== "Combo" && <div className="animation-search"><input aria-label="Search animations" placeholder="Find an animation…" value={animationSearch} onChange={event => setAnimationSearch(event.target.value)} />{animationSearch && <button aria-label="Clear animation search" onClick={() => setAnimationSearch("")}><X size={14} /></button>}</div>}
                 {animationPhase === "Entrance" && (
                   <Section title="Entrance">
-                    <div className="choice-grid">
-                      {ANIMATIONS.filter((a) => text || a !== "Letter Pop In").map((a) => (
+                    <div className="choice-grid animation-choice-grid">
+                      {availableAnimations.map((a) => (
                         <button
                           key={a}
                           aria-label={"Entrance " + a}
+                          disabled={a !== "None" && phaseStack.length >= 20 && !phaseStack.some(layer => layer.name === a)}
                           aria-pressed={a === "None" ? phaseStack.length === 0 : phaseStack.some((layer) => layer.name === a)}
                           className={(a === "None" ? phaseStack.length === 0 : phaseStack.some((layer) => layer.name === a)) ? "active" : ""}
                           onClick={() => chooseAnimation(a)}
@@ -853,11 +865,12 @@ export function Inspector({
                 )}
                 {animationPhase === "Exit" && (
                   <Section title="Exit">
-                    <div className="choice-grid">
-                      {ANIMATIONS.filter((a) => text || a !== "Letter Pop In").map((a) => (
+                    <div className="choice-grid animation-choice-grid">
+                      {availableAnimations.map((a) => (
                         <button
                           key={a}
                           aria-label={"Exit " + (a === "Letter Pop In" ? "Letter Pop Out" : a)}
+                          disabled={a !== "None" && phaseStack.length >= 20 && !phaseStack.some(layer => layer.name === a)}
                           aria-pressed={a === "None" ? phaseStack.length === 0 : phaseStack.some((layer) => layer.name === a)}
                           className={(a === "None" ? phaseStack.length === 0 : phaseStack.some((layer) => layer.name === a)) ? "active" : ""}
                           onClick={() => chooseAnimation(a)}
@@ -899,7 +912,7 @@ export function Inspector({
                     </Section>}
                   </>
                 )}
-                {animationPhase !== "Combo" && <p className="field-note animation-stack-hint">Select more than one animation to stack them. Click a selected animation again to remove it.</p>}
+                {animationPhase !== "Combo" && <p className="field-note animation-stack-hint">{availableAnimations.length ? "Select more than one animation to stack them. Click a selected animation again to remove it." : "No matching animations. Clear the search to see every preset."}</p>}
                 {phaseStack.length > 0 && <div className="animation-stack-list" aria-label={`${animationPhase} animation stack`}>
                   {phaseStack.map((layer, index) => <button key={index} className={selectedLayer === layer ? "active" : ""}
                     aria-label={`Edit ${layer.name} in ${animationPhase.toLowerCase()} stack`}
@@ -908,14 +921,15 @@ export function Inspector({
                 {selectedLayer && (
                   <Section title={`Fine tune · ${phaseBase}`} action={previewAnimation ? <button title={`Preview ${animationPhase.toLowerCase()}`} aria-label={`Preview ${animationPhase.toLowerCase()} animation`} onClick={() => previewAnimation(animationPhase === "Exit" ? "Exit" : "Entrance", animationItem)}><Play size={14} /></button> : undefined}>
                     {activePresetName && <p className="animation-preset-label">Using “{activePresetName}” · edits here only change this clip.</p>}
-                    <AnimationTuner name={phaseBase} options={phaseOptions} onChange={updateAnimationOptions} />
+                    <AnimationTuner name={phaseBase} options={phaseOptions} onChange={updateAnimationOptions} isText={!!text} />
+                    <button className="button secondary animation-reset" aria-label={`Reset ${phaseBase} settings`} onClick={() => setAnimationStack(phaseStack.map(layer => layer === selectedLayer ? { ...layer, settings: { ...phaseDefaults } } : layer))}><RotateCcw size={12} /> Reset this animation</button>
                     <p className="field-note">These settings change only {phaseBase} in the stack. Preview or scrub to see the combined motion.</p>
                   </Section>
                 )}
                 {animationPhase !== "Combo" && <Section title={`My ${animationPhase.toLowerCase()} presets`}>
-                  {customPresets.filter((preset) => preset.phase === animationPhase).length ? (
+                  {compatiblePresets.filter((preset) => preset.phase === animationPhase).length ? (
                     <div className="custom-animation-list">
-                      {customPresets.filter((preset) => preset.phase === animationPhase).map((preset) => (
+                      {compatiblePresets.filter((preset) => preset.phase === animationPhase).map((preset) => (
                         <div className="custom-animation-item" key={preset.id}>
                           <button className="custom-animation-apply" onClick={() => applyCustomPreset(preset)} title={`Replace stack with ${preset.name}`}>
                             <strong>{preset.name}</strong><small>{(preset.layers ?? [{name: preset.base}]).map((layer) => layer.name).join(" + ")} · {preset.duration.toFixed(1)}s</small>
@@ -1406,16 +1420,30 @@ function GradientStopRow({ stop, index, removable, keyframe, onChange, onRemove 
     </div>
   </div>;
 }
-function AnimationTuner({ name, options, onChange }: {
+function AnimationTuner({ name, options, onChange, isText }: {
   name: TextClip["animation"];
   options: TextAnimationOptions;
   onChange: (patch: TextAnimationOptions) => void;
+  isText: boolean;
 }) {
-  const directional = ["Rise", "Drop", "Slide", "Slide right", "Bounce", "Drift", "Custom"].includes(name);
-  const scalable = ["Zoom", "Shrink", "Pop", "Elastic", "Custom"].includes(name);
-  const zoomDirection = ["Zoom", "Shrink", "Custom"].includes(name);
+  const sequence = isText && isTextSequenceAnimation(name);
+  const directional = ["Rise", "Drop", "Slide", "Slide right", "Bounce", "Drift", "Custom", "Letter Slide", "Letter Bounce", "Line Slide"].includes(name);
+  const scalable = ["Zoom", "Shrink", "Pop", "Elastic", "Custom", "Letter Pop In", "Word Pop", "Letter Bounce"].includes(name);
+  const zoomDirection = ["Zoom", "Shrink", "Custom", "Letter Pop In", "Word Pop", "Letter Bounce"].includes(name);
   const angle = (((options.angle ?? 0) % 360) + 360) % 360;
   return <div className="animation-tuner">
+    <Range label="Start delay" value={(options.delay ?? 0) * 100} min={0} max={95} suffix="%" onChange={value => onChange({ delay: value / 100 })} />
+    <Range label="Active span" value={Math.min(options.span ?? 1, 1 - (options.delay ?? 0)) * 100} min={1} max={Math.max(1, (1 - (options.delay ?? 0)) * 100)} suffix="%" onChange={value => onChange({ span: value / 100 })} />
+    <p className="field-note">Percentages of this phase. Delay this layer or let it finish early without changing other layers.</p>
+    {sequence && <div className="text-sequence-controls">
+      <Field label="Animate by"><select aria-label="Animate by" value={options.unit ?? "letter"} onChange={event => onChange({ unit: event.target.value as TextAnimationOptions["unit"] })}><option value="letter">Letters</option><option value="word">Words</option><option value="line">Lines</option></select></Field>
+      <Field label="Reveal order"><select aria-label="Reveal order" value={options.order ?? "forward"} onChange={event => onChange({ order: event.target.value as TextAnimationOptions["order"] })}><option value="forward">First to last</option><option value="reverse">Last to first</option><option value="center-out">Center outward</option><option value="edges-in">Edges inward</option><option value="random">Shuffled</option></select></Field>
+      {options.order === "random" && <Range label="Shuffle seed" value={options.seed ?? 0} min={0} max={9999} onChange={value => onChange({ seed: Math.round(value) })} />}
+      <Range label="Stagger" value={(options.stagger ?? 0.65) * 100} min={0} max={95} suffix="%" onChange={value => onChange({ stagger: value / 100 })} />
+      <p className="field-note">0% moves every unit together; higher values spread their starts. Exit uses the same chosen order to remove units.</p>
+      {["Letter Pop In", "Word Pop", "Letter Bounce"].includes(name) && <Range label="Overshoot" value={(options.overshoot ?? 0.35) * 100} min={0} max={100} suffix="%" onChange={value => onChange({ overshoot: value / 100 })} />}
+      {name === "Letter Flip" && <Field label="Flip axis"><select aria-label="Flip axis" value={options.flipAxis ?? "horizontal"} onChange={event => onChange({ flipAxis: event.target.value as TextAnimationOptions["flipAxis"] })}><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></select></Field>}
+    </div>}
     {directional && <>
       <div className="animation-directions" role="group" aria-label="Motion direction">
         {([["Right", 0, "→"], ["Down", 90, "↓"], ["Left", 180, "←"], ["Up", 270, "↑"]] as const).map(([label, value, icon]) =>
@@ -1433,12 +1461,13 @@ function AnimationTuner({ name, options, onChange }: {
     </>}
     <Range label="Rotation" value={options.rotation ?? 0} min={-360} max={360} suffix="°" onChange={(value) => onChange({ rotation: value })} />
     <Range label="Blur" value={(options.blur ?? 0) * 100} min={0} max={10} step={0.1} suffix="%" onChange={(value) => onChange({ blur: value / 100 })} />
-    {!(["Typewriter", "Letter Pop In", "Wipe left", "Wipe right", "Wipe up", "Wipe down"].includes(name)) &&
+    {!(["Typewriter", "Wipe left", "Wipe right", "Wipe up", "Wipe down"].includes(name)) &&
       <Toggle label="Fade in / disappear" value={options.fade !== false} onChange={(value) => onChange({ fade: value })} />}
     <Field label="Easing">
       <select value={options.easing ?? "ease-out"} onChange={(event) => onChange({ easing: event.target.value as TextAnimationOptions["easing"] })}>
         <option value="ease-out">Ease out</option><option value="ease-in-out">Ease in & out</option>
         <option value="ease-in">Ease in</option><option value="linear">Linear</option>
+        <option value="back">Back overshoot</option><option value="spring">Spring</option>
       </select>
     </Field>
   </div>;

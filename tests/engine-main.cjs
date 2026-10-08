@@ -3,6 +3,8 @@ const { readFile, writeFile } = require("node:fs/promises");
 const path = require("node:path");
 app.setPath("userData", path.resolve("work/engine-profile"));
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
 app.whenReady().then(async () => {
   const window = new BrowserWindow({
     show: false,
@@ -21,16 +23,17 @@ app.whenReady().then(async () => {
   const timeout = setTimeout(() => {
     process.stderr.write("Rendering tests timed out\n");
     app.exit(1);
-  }, 90000);
+  }, 180000);
   try {
     await window.loadFile(path.resolve("tests/engine.html"));
     await window.webContents.executeJavaScript(
       await readFile("work/engine-tests/engine.js", "utf8"),
     );
+    const suite = process.env.CUTLINE_ENGINE_SUITE;
     const result =
-      await window.webContents.executeJavaScript(process.env.CUTLINE_ENGINE_SUITE === "scenes" ? "runSceneTests()" : "runEngineTests()");
+      await window.webContents.executeJavaScript(suite === "scenes" ? "runSceneTests()" : suite === "text-sequence" ? "runTextSequenceTests()" : "runEngineTests()");
     await writeFile(
-      process.env.CUTLINE_ENGINE_SUITE === "scenes" ? "work/scene-engine-results.json" : "work/engine-results.json",
+      suite === "scenes" ? "work/scene-engine-results.json" : suite === "text-sequence" ? "work/text-sequence-engine-results.json" : "work/engine-results.json",
       JSON.stringify(result, null, 2),
     );
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");

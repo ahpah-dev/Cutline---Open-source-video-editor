@@ -46,6 +46,7 @@ import { runMaskUiChecks } from "./mask-ui-engine";
 import { runExpandedEffectsTests } from "./expanded-effects-engine";
 import { runTransitionTests } from "./transitions-engine";
 import { runSceneDetectionChecks } from "./scene-detection-engine";
+import { runTextSequenceChecks } from "./text-sequence-engine";
 import { runColorGradingChecks } from "./color-grading-engine";
 import { runTextFontChecks } from "./text-fonts-engine";
 import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "../app/editor/codexTypes";
@@ -1363,6 +1364,7 @@ export async function runEngineTests() {
   await runExpandedEffectsTests(check, assert);
   await runTransitionTests(check, assert);
   await runSceneDetectionChecks(check, assert);
+  await runTextSequenceChecks(check, assert);
   return { passed, failures, details };
 }
 (
@@ -1377,3 +1379,13 @@ async function runSceneTests() {
   return { passed, failures };
 }
 (globalThis as typeof globalThis & { runSceneTests: typeof runSceneTests }).runSceneTests = runSceneTests;
+
+async function runTextSequenceTests() {
+  const passed: string[] = [], failures: string[] = [];
+  await runTextSequenceChecks(async (name, run) => {
+    console.log(`TEXT CHECK: ${name}`);
+    try { await run(); passed.push(name); } catch (error) { failures.push(`${name}: ${String((error as Error).stack ?? error)}`); }
+  }, assert);
+  return { passed, failures };
+}
+(globalThis as typeof globalThis & { runTextSequenceTests: typeof runTextSequenceTests }).runTextSequenceTests = runTextSequenceTests;

@@ -1,6 +1,16 @@
-# Cutline 0.8.2
+# Cutline 0.8.3
 
 A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files and raw audio stay local; the optional assistant receives project metadata, requested images, transcripts and audio-analysis results.
+
+## Customizable text sequences (new in 0.8.3)
+
+Select a text clip → **Animation**. Eight new presets join Letter Pop In and Typewriter: **Letter Fade, Letter Slide, Letter Blur, Letter Spin, Letter Bounce, Letter Flip, Word Pop and Line Slide**. They work on both entrance and exit and stack with each other, whole-clip animations, Combo loops and effects. Search the preset grid to find a treatment quickly.
+
+Choose **letters, words or lines**, then reveal forward, reverse, center-out, edges-in or in a reproducible shuffled order. Adjust stagger, movement angle/distance, pop overshoot, flip axis, zoom direction, spin, blur, fade and easing where applicable. Back and Spring easing add more expressive motion. Each stacked layer has its own **start delay and active span**, measured as a percentage of that phase's total duration. Exit ordering follows the same chosen order rather than silently reversing it. Reset affects only the selected layer.
+
+Save the complete stack as a custom preset, including all new controls; settings survive project backups, splitting and validated Codex edits. New letter/word/line presets are text-only, so video clips do not show inapplicable controls. Full-title alignment stays stable while typing/revealing, and grapheme segmentation keeps emoji and combining accents together. Very long titles batch adjacent units to bound animation work; preview/export still depend on your device, font and project complexity.
+
+![Text sequence controls in the Windows editor](docs/screenshots/text-animations.png)
 
 ## Scene-cut detection (new in 0.8.2)
 
@@ -165,6 +175,8 @@ npm run desktop:dist
 The 0.8.1 checks add model-supported effort forwarding/default reset, image-input limits and text-only model rejection, measured audio levels, bounded trim/speed/time mappings and strict media tool validation. `electron tests/codex-media-desktop.cjs` runs the real production Windows UI, preload/IPC bridge and local workers with a test-only Codex transport: original image bounds, distinct decoded video frames, reference downsampling and forwarding, rhythmic audio analysis, unchanged project revisions, permission refusal/revocation, stop cancellation and small-window composer geometry. It does not claim AI inference was performed. The real account connection/catalog is separately checked without sending an inference request. For optional real local speech verification, generate a synthetic WAV with `tests/codex-speech-fixture.ps1`, then set `CUTLINE_SPEECH_TEST=1` for the media test; this explicitly downloads/caches free Tiny in the isolated test profile and checks a nonempty timestamped transcript. Large v3 GPU inference is not separately exercised by these checks.
 
 ## Verification for this release
+
+For 0.8.3, all 103 unit/component/protocol checks and 81 rendering/export checks pass, plus the server-rendered shell (185 total), type checking and scoped lint. New checks verify all sequence presets on entrance/exit, real pixel changes from customization, Unicode grouping, mixed animation stacks, stable Typewriter bounds, native inspector controls, saved recipes, per-layer reset and actual encoded video. The encoder now allows its asynchronous final canvas capture to reach the recorder before stopping. Production checks exercise the packaged app archive in an isolated profile at 1100×700 and 1480×920; the same harness can verify an installed archive without accessing normal projects. The website retains its desktop/mobile/200%-zoom gallery and download checks. These checks do not certify every device, font, codec or long-project workload; earlier live AI and Whisper model checks were not repeated.
 
 For 0.8.2, all 96 unit/component/protocol checks and 76 render/export checks pass, plus the server-rendered shell check (173 total), type checking and scoped lint. Scene detection is tested on decoded local video with source trim/speed, thumbnail review, marker application, splitting, undo and cancellation; production scene checks also pass against the packaged app archive. The introductory website passes seven-view gallery, keyboard, dialog and FAQ checks at desktop, mobile and 200% zoom with no horizontal overflow or browser console errors. Earlier media/model checks described below were not all repeated for this update. Estimates and device/codec compatibility still require review.
 
