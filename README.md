@@ -1,6 +1,14 @@
-# Cutline 0.8.1
+# Cutline 0.8.2
 
 A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files and raw audio stay local; the optional assistant receives project metadata, requested images, transcripts and audio-analysis results.
+
+## Scene-cut detection (new in 0.8.2)
+
+Inspired by [CapCut Split scene](https://www.capcut.com/tools/cut-scene) and [Premiere Scene Edit Detection](https://helpx.adobe.com/uk/premiere/desktop/edit-projects/change-clip-sequence/detect-edit-points-using-scene-edit-detection.html): click **Scene cuts** in the timeline toolbar, or right-click a video clip → **Detect scene cuts**. Select a video, tune sensitivity and minimum scene length, then scan locally. Before/after thumbnails let you audition each proposed boundary and exclude false positives. Apply as **editable clips** or **moment markers only**; either action is one undoable batch. Markers are normal timeline moments readable by Codex.
+
+The lightweight detector compares low-resolution source-frame colors and spatial changes, suppresses isolated flashes, and refines boundaries to project-frame timing. It honors source trim and speed, ignores overlays/effects, preserves source-linked audio and existing keyframe timing when splitting, respects layer locks, and refuses stale results after edits/relinking. Detached audio and other layers remain untouched. Nothing is uploaded; no ML model or API key is needed. Scans are limited to 10-minute clips and 300 candidate cuts. This targets hard cuts, **not semantic scene understanding or dissolve detection**; very short shots can be missed. Review estimates before applying.
+
+![Local scene-cut review in Cutline](docs/screenshots/scene-cuts.png)
 
 ## Codex reasoning, image access and free local audio analysis
 
@@ -157,6 +165,8 @@ npm run desktop:dist
 The 0.8.1 checks add model-supported effort forwarding/default reset, image-input limits and text-only model rejection, measured audio levels, bounded trim/speed/time mappings and strict media tool validation. `electron tests/codex-media-desktop.cjs` runs the real production Windows UI, preload/IPC bridge and local workers with a test-only Codex transport: original image bounds, distinct decoded video frames, reference downsampling and forwarding, rhythmic audio analysis, unchanged project revisions, permission refusal/revocation, stop cancellation and small-window composer geometry. It does not claim AI inference was performed. The real account connection/catalog is separately checked without sending an inference request. For optional real local speech verification, generate a synthetic WAV with `tests/codex-speech-fixture.ps1`, then set `CUTLINE_SPEECH_TEST=1` for the media test; this explicitly downloads/caches free Tiny in the isolated test profile and checks a nonempty timestamped transcript. Large v3 GPU inference is not separately exercised by these checks.
 
 ## Verification for this release
+
+For 0.8.2, all 96 unit/component/protocol checks and 76 render/export checks pass, plus the server-rendered shell check (173 total), type checking and scoped lint. Scene detection is tested on decoded local video with source trim/speed, thumbnail review, marker application, splitting, undo and cancellation; production scene checks also pass against the packaged app archive. The introductory website passes seven-view gallery, keyboard, dialog and FAQ checks at desktop, mobile and 200% zoom with no horizontal overflow or browser console errors. Earlier media/model checks described below were not all repeated for this update. Estimates and device/codec compatibility still require review.
 
 For 0.8.1, all 88 unit/component/protocol checks and 73 render/export checks pass (161 total), plus the server-rendered shell check, type checking and scoped lint. New production media/permission/composer checks and real Tiny speech transcription pass against both the desktop build and packaged app archive. Run real-time export checks without concurrent CPU-heavy builds/transcription; under load, recording duration/frame timing can drift and tests can time out. The assistant cancels its local media workers when user import/export/subtitle work begins. These checks do not certify all devices/codecs or semantic AI accuracy.
 

@@ -28,9 +28,9 @@ app.whenReady().then(async () => {
       await readFile("work/engine-tests/engine.js", "utf8"),
     );
     const result =
-      await window.webContents.executeJavaScript("runEngineTests()");
+      await window.webContents.executeJavaScript(process.env.CUTLINE_ENGINE_SUITE === "scenes" ? "runSceneTests()" : "runEngineTests()");
     await writeFile(
-      "work/engine-results.json",
+      process.env.CUTLINE_ENGINE_SUITE === "scenes" ? "work/scene-engine-results.json" : "work/engine-results.json",
       JSON.stringify(result, null, 2),
     );
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");

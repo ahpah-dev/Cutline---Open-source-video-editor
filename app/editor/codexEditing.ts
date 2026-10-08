@@ -174,7 +174,7 @@ export function editingCatalog(fonts = FONTS) {
     comboAnimations: COMBO_ANIMATIONS, effects: EFFECTS.map((effect) => effect.name), masks: MASK_SHAPES, blendModes: BLEND_MODES,
     transitions: TRANSITIONS.map((transition) => transition.name), filters: FILTERS.map((filter) => filter.name),
     colorGrading: { ranges: GRADE_RANGES, units: "Exposure is display-referred stops. Wheel hue uses degrees and strength 0–100; tonal/luminance/tint controls use −100–100. Curves use 0–1 input/output points, up to 12 per channel. Scalar controls support keyframes. gradingEnabled bypasses all color controls and look, but not effects/chroma/masks. This is 8-bit sRGB/Rec.709 grading, not scene-linear HDR/RAW." },
-    markerSemantics: "Markers with source:'auto' are locally detected audio guides, with sourceClipId and optional estimated bpm. Other markers are manually placed. Use all guides' absolute timeline times; detection can be uncertain, so preserve manual beats/moments and ask before deleting guides. Auto guides are not motion/music effects and do not automatically follow later clip timing changes.",
+    markerSemantics: "Markers with source:'auto' are locally detected audio guides, with sourceClipId and optional estimated bpm. Moment markers with source:'scene' are locally detected hard-cut boundaries in sourceClipId, not beats or semantic scene labels. Markers without a source are manually placed. Use all guides' absolute timeline times; detection can be uncertain, so preserve manual beats/moments and ask before deleting guides. Auto/scene guides are not effects and do not automatically follow later clip timing changes.",
     fonts, textProperties: textFields, clipProperties: clipFields,
   };
 }

@@ -45,6 +45,8 @@ import { Timeline } from "./editor/Timeline";
 import { Preview } from "./editor/Preview";
 import { BeatDetectionDialog, beatSourceKey } from "./editor/BeatDetectionDialog";
 import { applyBeatMarkers } from "./editor/beatDetection";
+import { SceneDetectionDialog } from "./editor/SceneDetectionDialog";
+import { applySceneCuts, sceneSourceKey } from "./editor/sceneDetection";
 import { ThemePicker } from "./editor/ThemePicker";
 import { Inspector, Field } from "./editor/Inspector";
 import { CodexPanel } from "./editor/CodexPanel";
@@ -145,6 +147,7 @@ export default function Editor() {
     [archives, setArchives] = useState<PersistedProject[]>([]);
   const [subtitleClipId, setSubtitleClipId] = useState("");
   const [beatsOpen,setBeatsOpen]=useState(false);
+  const [scenesOpen, setScenesOpen] = useState(false);
   const [subtitleModel, setSubtitleModel] = useState("onnx-community/whisper-large-v3-ONNX");
   const [subtitleProgress, setSubtitleProgress] = useState<{ message: string; percent: number | null } | null>(null);
   const [subtitleError, setSubtitleError] = useState("");
@@ -652,7 +655,7 @@ export default function Editor() {
       abort.current = null;
     }
   }
-  const codex = useCodex({ project, ready, blocked: !!busy || !!exporting || !!subtitleProgress || dialog === "projects", time, selected, canUndo, canRedo, edit, dispatch, seek, select, openExport });
+  const codex = useCodex({ project, ready, blocked: !!busy || !!exporting || !!subtitleProgress || scenesOpen || dialog === "projects", time, selected, canUndo, canRedo, edit, dispatch, seek, select, openExport });
   return (
     <main
       className={"editor-app" + (desktop ? " desktop-app" : "")}
@@ -1337,18 +1340,26 @@ export default function Editor() {
           else if (action === "split") split(target);
           else if (action === "freeze") freeze(target);
           else if (action === "detach-audio" && "assetId" in item) detachAudio(item);
+          else if (action === "detect-scenes") { select(target); setPlaying(false); setScenesOpen(true); }
           else if (action === "duplicate") duplicate(false, item);
           else if (action === "delete") remove(target);
         }}
         ripple={ripple}
         setRipple={setRipple}
         onDetectBeats={()=>{setPlaying(false);setBeatsOpen(true);}}
+        onDetectScenes={() => { setPlaying(false); setScenesOpen(true); }}
       />
       {beatsOpen&&<BeatDetectionDialog key={project.id} project={project} initialClipId={selectedClip?.id} close={()=>setBeatsOpen(false)} seek={seek} apply={(clipId,key,times,bpm,replace)=>{
         const clip=project.clips.find(c=>c.id===clipId);
         if(!clip||beatSourceKey(project,clip)!==key){notify("Source timing changed. Reanalyze the audio first.");return;}
         edit(p=>applyBeatMarkers(p,clipId,times,bpm,replace));setBeatsOpen(false);notify("Beat markers added. Undo removes this batch.");
       }}/>}
+      {scenesOpen && <SceneDetectionDialog key={project.id} project={project} initialClipId={selectedClip?.id} close={() => setScenesOpen(false)} seek={seek} apply={(clipId, key, times, mode)=>{
+        const clip = project.clips.find(c => c.id === clipId);
+        if (!clip || isTrackLocked(project, clip.track) || sceneSourceKey(project, clip) !== key) { notify("The clip changed. Scan again before applying."); return; }
+        edit(p => applySceneCuts(p, clipId, key, times, mode)); setScenesOpen(false); select({kind:"clip",id:clipId});
+        notify(mode === "split" ? "Scene cuts applied. Undo restores the original clip." : "Scene moment markers added. Undo removes this batch.");
+      }} />}
       <input
         hidden
         type="file"

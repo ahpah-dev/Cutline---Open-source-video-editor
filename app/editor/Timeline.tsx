@@ -35,6 +35,7 @@ import {
   Flag,
   Bookmark,
   AudioLines,
+  ScanLine,
   LockKeyhole,
   LockKeyholeOpen,
   AlignStartHorizontal,
@@ -68,7 +69,7 @@ import { historyReducer } from "./useProject";
 import { waveformColumns } from "./waveform";
 import { alignSelectionToPlayhead, isTrackLocked, selectionItems } from "./timelineOperations";
 type Action = Parameters<typeof historyReducer>[1];
-type MenuAction = "copy" | "paste" | "split" | "freeze" | "duplicate" | "delete" | "detach-audio";
+type MenuAction = "copy" | "paste" | "split" | "freeze" | "duplicate" | "delete" | "detach-audio" | "detect-scenes";
 type Props = {
   project: Project;
   selection: Selection;
@@ -92,6 +93,7 @@ type Props = {
   ripple: boolean;
   setRipple: (v: boolean) => void;
   onDetectBeats?:()=>void;
+  onDetectScenes?:()=>void;
 };
 type Drag = {
   item: Clip | TextClip;
@@ -132,6 +134,7 @@ export function Timeline({
   ripple,
   setRipple,
   onDetectBeats,
+  onDetectScenes,
 }: Props) {
   const [pps, setPps] = useState(64),
     [snapping, setSnapping] = useState(true),
@@ -662,6 +665,7 @@ export function Timeline({
             <span>Mark beat</span>
           </button>
           {onDetectBeats&&<button aria-label="Auto detect beats" title="Analyze audio and preview automatic beat markers" onClick={onDetectBeats}><AudioLines size={15}/><span>Auto beats</span></button>}
+          {onDetectScenes && <button aria-label="Auto detect scene cuts" title="Find and review cuts in a video clip" onClick={onDetectScenes}><ScanLine size={15}/><span>Scene cuts</span></button>}
           <button
             className={hasMomentMarker ? "active timeline-marker-toolbar moment" : ""}
             aria-label="Mark moment"
@@ -851,7 +855,7 @@ export function Timeline({
                   className={`timeline-marker ${marker.kind}${marker.source==="auto"?" auto":""}`}
                   style={{ left: marker.time * pps }}
                   aria-label={`Go to ${marker.kind === "beat" ? "beat" : "important moment"} ${index + 1} at ${clock(marker.time, true, project.fps)}; Delete or right-click to remove`}
-                  title={`${marker.source==="auto"?`Auto beat${marker.bpm?` · ${marker.bpm} BPM`:""}`:marker.kind === "beat" ? "Beat" : "Moment"} · ${clock(marker.time, true, project.fps)} · click to seek, Delete or right-click to remove`}
+                  title={`${marker.source==="scene"?"Detected scene cut":marker.source==="auto"?`Auto beat${marker.bpm?` · ${marker.bpm} BPM`:""}`:marker.kind === "beat" ? "Beat" : "Moment"} · ${clock(marker.time, true, project.fps)} · click to seek, Delete or right-click to remove`}
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={() => seek(marker.time)}
                   onKeyDown={(event) => {
@@ -1171,6 +1175,7 @@ export function Timeline({
           <button role="menuitem" disabled={menuLocked} onClick={() => menuAction("duplicate")}><Copy size={15} />Duplicate <kbd>Ctrl D</kbd></button>
           <div className="clip-menu-divider" />
           <button role="menuitem" disabled={menuLocked} onClick={() => menuAction("split")}><Scissors size={15} />Split at playhead <kbd>Ctrl B</kbd></button>
+          {menuItem && "assetId" in menuItem && menuItem.kind === "video" && menuItem.frozenAt === undefined && project.assets.some(asset => asset.id === menuItem.assetId && asset.kind === "video") && <button role="menuitem" disabled={menuLocked} onClick={() => menuAction("detect-scenes")}><ScanLine size={15} />Detect scene cuts</button>}
           {"assetId" in menuItem && menuItem.kind === "video" && project.assets.find((a) => a.id === menuItem.assetId)?.kind === "video" && menuItem.frozenAt === undefined &&
             <button role="menuitem" disabled={menuLocked} onClick={() => menuAction("freeze")}><Snowflake size={15} />Freeze frame <kbd>2 sec</kbd></button>}
           {"assetId" in menuItem && menuItem.kind === "video" && project.assets.find((asset) => asset.id === menuItem.assetId)?.kind === "video" && menuItem.frozenAt === undefined &&

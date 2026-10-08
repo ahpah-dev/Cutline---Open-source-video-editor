@@ -45,6 +45,7 @@ import { runVisualCompositingTests } from "./visual-compositing-engine";
 import { runMaskUiChecks } from "./mask-ui-engine";
 import { runExpandedEffectsTests } from "./expanded-effects-engine";
 import { runTransitionTests } from "./transitions-engine";
+import { runSceneDetectionChecks } from "./scene-detection-engine";
 import { runColorGradingChecks } from "./color-grading-engine";
 import { runTextFontChecks } from "./text-fonts-engine";
 import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "../app/editor/codexTypes";
@@ -1361,8 +1362,18 @@ export async function runEngineTests() {
   await runAudioReliabilityChecks(check);
   await runExpandedEffectsTests(check, assert);
   await runTransitionTests(check, assert);
+  await runSceneDetectionChecks(check, assert);
   return { passed, failures, details };
 }
 (
   globalThis as typeof globalThis & { runEngineTests: typeof runEngineTests }
 ).runEngineTests = runEngineTests;
+
+async function runSceneTests() {
+  const passed: string[] = [], failures: string[] = [];
+  await runSceneDetectionChecks(async (name, run) => {
+    try { await run(); passed.push(name); } catch (error) { failures.push(`${name}: ${String((error as Error).stack ?? error)}`); }
+  }, assert);
+  return { passed, failures };
+}
+(globalThis as typeof globalThis & { runSceneTests: typeof runSceneTests }).runSceneTests = runSceneTests;
