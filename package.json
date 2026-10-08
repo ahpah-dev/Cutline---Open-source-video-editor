@@ -1,6 +1,6 @@
 {
   "name": "cutline-video-editor",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "A private, watermark-free local video editor for Windows.",
   "author": "Cutline",
   "main": "electron/main.cjs",

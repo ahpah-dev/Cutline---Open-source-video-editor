@@ -51,6 +51,7 @@ import { runColorGradingChecks } from "./color-grading-engine";
 import { runTextFontChecks } from "./text-fonts-engine";
 import { runDeletionChecks } from "./deletion-engine";
 import { runOfflineExportChecks } from "./offline-export-engine";
+import { runPlaybackSyncChecks } from "./playback-sync-engine";
 import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "../app/editor/codexTypes";
 
 const assert = (condition: unknown, message: string) => {
@@ -1365,6 +1366,7 @@ export async function runEngineTests() {
   await runColorGradingChecks(check);
   await runTextFontChecks(check);
   await runAudioReliabilityChecks(check);
+  await runPlaybackSyncChecks(check);
   await runExpandedEffectsTests(check, assert);
   await runTransitionTests(check, assert);
   await runSceneDetectionChecks(check, assert);
@@ -1418,3 +1420,13 @@ async function runOfflineExportTests() {
   return { passed, failures };
 }
 (globalThis as typeof globalThis & { runOfflineExportTests: typeof runOfflineExportTests }).runOfflineExportTests = runOfflineExportTests;
+
+async function runPlaybackTests() {
+  const passed:string[]=[],failures:string[]=[];
+  await runPlaybackSyncChecks(async(name,run)=>{
+    console.log(`PLAYBACK CHECK: ${name}`);
+    try {await run();passed.push(name);}catch(error){failures.push(`${name}: ${String((error as Error).stack ?? error)}`);}
+  });
+  return {passed,failures};
+}
+(globalThis as typeof globalThis & {runPlaybackTests:typeof runPlaybackTests}).runPlaybackTests=runPlaybackTests;

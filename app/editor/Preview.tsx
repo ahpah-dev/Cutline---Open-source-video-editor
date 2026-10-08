@@ -6,6 +6,7 @@ import {
   type Dispatch,
   type PointerEvent,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   Play,
   Pause,
@@ -139,8 +140,7 @@ export function Preview({
     };
   }, [immersive, exitPreviewFullscreen]);
   const latest = useRef({ project, selection, time, playing, muted });
-  const start = useRef({ at: 0, time: 0 }),
-    drag = useRef<{
+  const drag = useRef<{
       id: string;
       kind: "clip" | "text";
       mode: "move" | "scale";
@@ -189,11 +189,26 @@ export function Preview({
     };
   }, [project, onError]);
   useEffect(() => {
+    const media = pool.current;
+    if (!media) return;
+    let active = true;
     if (playing) {
-      start.current = { at: performance.now(), time: latest.current.time };
-      void pool.current?.enableAudio().catch((error) => onError(error.message));
-    } else pool.current?.pause();
-  }, [playing, onError]);
+      const playbackProject = muted ? {...project,mutedTracks:project.clips.map(trackKey)} : project;
+      const at = latest.current.time;
+      void media.startPlayback(playbackProject,at,async () => {
+        if (!active || !canvas.current || !renderer.current) return;
+        const size=dimensions(project.ratio,540);
+        if (canvas.current.width!==size.width || canvas.current.height!==size.height) Object.assign(canvas.current,size);
+        renderer.current.draw(canvas.current,project,at,media.sources);
+        // Warm/decode/rasterize the selected frame before starting audible
+        // playback. First-use GPU/font work must not create an audio head start.
+        await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
+      }).catch(error => {
+        if (active) { setPlaying(false); onError(error.message); }
+      });
+    } else media.pause();
+    return () => { active = false; media.pause(); };
+  }, [playing, project, muted, onError, setPlaying]);
   useEffect(() => {
     let frame = 0,
       lastUi = 0,
@@ -210,26 +225,17 @@ export function Preview({
         target = canvas.current;
       if (media && draw && target) {
         const duration = projectDuration(p.project);
-        const t = p.playing
-          ? Math.min(
-              duration,
-              start.current.time + (now - start.current.at) / 1000,
-            )
-          : p.time;
+        const renderProject = p.muted
+          ? {...p.project,mutedTracks:p.project.clips.map(trackKey)}
+          : p.project;
+        const t = p.playing ? Math.min(duration,media.playbackTime(renderProject) ?? p.time) : p.time;
         if (p.playing && t >= duration) {
           setPlaying(false);
           setTime(duration);
-        } else if (p.playing && now - lastUi > 32) {
-          setTime(t);
-          lastUi = now;
         }
-        const renderProject = p.muted
-          ? {
-              ...p.project,
-              mutedTracks: p.project.clips.map(trackKey),
-            }
-          : p.project;
-        void media
+        // startPlayback owns positioning/play() until it is ready. A RAF must
+        // not pause those elements or race an obsolete scrub against startup.
+        if (!p.playing || media.playbackReady) void media
           .sync(
             renderProject,
             t,
@@ -238,6 +244,7 @@ export function Preview({
           .catch((error) => {
             if (!failed) {
               failed = true;
+              setPlaying(false);
               onError(error.message);
             }
           });
@@ -250,7 +257,7 @@ export function Preview({
           (p.playing
             ? now - drawnAt >= 1000 / p.project.fps
             : renderedTime !== t);
-        if (shouldDraw && media.textFontsReady) {
+        if (shouldDraw && media.textFontsReady && !media.previewSeeking) {
           draw.draw(
             target,
             p.project,
@@ -268,6 +275,15 @@ export function Preview({
         if (serialized !== lastBounds) {
           setBound(selected);
           lastBounds = serialized;
+        }
+        if (p.playing && t < duration && now-lastUi >= 32) {
+          // Rendering can be expensive. Publish the current audio position
+          // after that work, not a timestamp captured before a slow frame.
+          // Commit playback timestamps immediately. A deferred React update
+          // could otherwise publish a pre-stall timestamp after audio advanced.
+          flushSync(() => setTime(Math.min(duration,media.playbackTime(renderProject) ?? t)));
+          setLoading(media.playbackBuffering);
+          lastUi = now;
         }
       }
       frame = requestAnimationFrame(tick);

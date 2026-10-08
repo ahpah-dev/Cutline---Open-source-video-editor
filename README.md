@@ -1,6 +1,18 @@
-# Cutline 0.8.5
+# Cutline 0.8.6
 
 A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files and raw audio stay local; the optional assistant receives project metadata, requested images, transcripts and audio-analysis results.
+
+## Seek/playback synchronization (new in 0.8.6)
+
+Rapid timeline scrubbing keeps the **newest seek target**, even when the previous seek is still decoding. Play waits for source positioning, audio initialization, a warmed preview frame and the active `play()` promises before advancing the transport. Stopping or seeking again invalidates obsolete startup work.
+
+During playback, the timeline reads an active media source's playback position, preferring audible audio, with source trim, timeline placement and speed accounted for. Wall time is only a fallback for images/text and gaps. Other layers correct drift beyond 40 ms of timeline time rather than the old 180 ms source-time tolerance. Decoder seeks or missing current-frame data pause/mute the whole transport so another audio layer cannot run ahead. Gap fallback stops at the next source boundary instead of skipping short clips after a late frame. UI timestamps are sampled after preview rendering and committed synchronously at a bounded cadence, so deferred UI work cannot publish an old timestamp after a stall.
+
+This prevents persistent transport drift, not all device latency or frame drops. A blocked renderer cannot draw until Windows schedules it again; the next update reads the current media clock instead of continuing an independent timer. Bluetooth/audio-driver latency and demanding effects still depend on the device. The frame-accurate offline export path is unchanged.
+
+Regression coverage includes real decoded video with a separate retimed song, rapid latest-target seeks, delayed/obsolete startup, overlapping retimed audio, simulated decoder buffering, cuts/silent gaps, and repeated Timeline drag/release → Play. `tests/playback-desktop.cjs` exercises native mouse input in the production Windows renderer using only generated media and an isolated profile, including a deliberate 100 ms main-thread stall. Its test-only offscreen compositor avoids hidden-window animation throttling. Assertions distinguish actual playhead commits from sampling between delayed frames; neither measurement is a hardware speaker-loopback test.
+
+Validation: 97 unit/component checks, 21 native/protocol checks and 96 render/playback/export checks passed. The six transport checks and native Windows drag/play/stall test were rerun after the final UI timestamp-commit change; the Windows test passed twice consecutively. Type checking, scoped lint, desktop/web builds and the server-rendered editor-shell test also passed.
 
 ## Disk-backed Windows export (new in 0.8.5)
 

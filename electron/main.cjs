@@ -88,6 +88,7 @@ function createWindow() {
       webSecurity: true,
       spellcheck: false,
       backgroundThrottling: false,
+      offscreen: process.env.CUTLINE_PLAYBACK_TEST === "1",
     },
   });
 

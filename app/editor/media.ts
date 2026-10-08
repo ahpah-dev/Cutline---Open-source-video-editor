@@ -1,9 +1,6 @@
 import {
-  animatedItem,
   clamp,
-  endOf,
   projectDuration,
-  trackKey,
   transitionWindow,
   uid,
   type Asset,
@@ -13,6 +10,7 @@ import type { MediaSources } from "./renderer";
 import { analyzeAudioWaveform } from "./waveform";
 import { ensureTextFonts } from "./textFonts";
 import type { ExportOptions, ExportSink } from "./offlineExport";
+import { mediaToTimeline, previewMediaStates, PreviewClock } from "./previewPlayback";
 
 function ready(element: HTMLMediaElement, event: string, timeout = 20000, signal?: AbortSignal) {
   if (signal?.aborted) return Promise.reject(new DOMException("Media loading cancelled", "AbortError"));
@@ -154,7 +152,81 @@ export class MediaPool {
   context: AudioContext | null = null;
   destination: MediaStreamAudioDestinationNode | null = null;
   private disposed = false;
-  private exporting = false;
+  private positions = new Map<string, { target: number; promise: Promise<void> }>();
+  private plays = new Map<string, Promise<void>>();
+  private playbackGeneration = 0;
+  private transport: { clock: PreviewClock; ready: boolean; blocked: boolean; master: string | null } | null = null;
+  get playbackReady() { return this.transport?.ready ?? false; }
+  get playbackBuffering() { return !!this.transport && (!this.transport.ready || this.transport.blocked); }
+  get previewSeeking() { return this.positions.size > 0; }
+  private clockNow() { return this.context?.currentTime ?? performance.now()/1000; }
+  /** Latest target wins, including when another seek is still decoding. */
+  private position(id: string, element: HTMLMediaElement, target: number) {
+    const existing = this.positions.get(id);
+    if (existing) { existing.target = target; return existing.promise; }
+    if (!element.seeking && Math.abs(element.currentTime-target) <= .008) return null;
+    const controller = this.controllers.get(id);
+    const job = { target, promise: Promise.resolve() };
+    this.positions.set(id, job);
+    job.promise = (async () => {
+      // Reserve before starting: rapid scrubs share one seek loop, not dozens
+      // of listeners/promises which can later resume an obsolete position.
+      await Promise.resolve();
+      while (!this.disposed && this.elements.get(id) === element && !controller?.signal.aborted) {
+        if (element.seeking) await ready(element,"seeked",10000,controller?.signal);
+        if (Math.abs(element.currentTime-job.target) <= .008) return;
+        const sought = ready(element,"seeked",10000,controller?.signal);
+        element.currentTime = job.target;
+        await sought;
+      }
+    })().catch(error => { if ((error as Error).name !== "AbortError") throw error; }).finally(() => {
+      if (this.positions.get(id) === job) this.positions.delete(id);
+    });
+    return job.promise;
+  }
+  async startPlayback(project: Project, time: number, beforePlay?: () => void | Promise<void>) {
+    this.pause();
+    const generation = this.playbackGeneration;
+    const transport = { clock: new PreviewClock(time,this.clockNow()), ready: false, blocked: true, master: null as string | null };
+    this.transport = transport;
+    try {
+      await Promise.all([this.enableAudio(),this.ensure(project)]);
+      if (generation !== this.playbackGeneration || this.disposed) return false;
+      await this.sync(project,time,false);
+      if (generation !== this.playbackGeneration || this.disposed) return false;
+      await beforePlay?.();
+      if (generation !== this.playbackGeneration || this.disposed) return false;
+      await this.sync(project,time,true);
+      if (generation !== this.playbackGeneration || this.disposed) return false;
+      // Unmute only once every active play() promise has actually resolved.
+      await this.sync(project,time,true);
+      if (generation !== this.playbackGeneration || this.disposed) return false;
+      transport.ready = true;
+      transport.clock.sample(this.clockNow(),undefined,true);
+      return true;
+    } catch(error) {
+      if (generation !== this.playbackGeneration || this.disposed) return false;
+      this.pause(); throw error;
+    }
+  }
+  playbackTime(project: Project) {
+    const transport = this.transport;
+    if (!transport) return null;
+    const now = this.clockNow();
+    if (!transport.ready) return transport.clock.sample(now,undefined,true);
+    const states = previewMediaStates(project,transport.clock.time).filter(state => state.clip.frozenAt === undefined && this.elements.has(state.clip.id));
+    const candidates = states.filter(state => !this.elements.get(state.clip.id)!.ended);
+    const master = candidates.find(state => state.clip.id === transport.master) ??
+      candidates.find(state => state.clip.kind === "audio" && state.volume > 0) ?? candidates.find(state => state.volume > 0) ?? candidates[0];
+    transport.master = master?.clip.id ?? null;
+    const element = master ? this.elements.get(master.clip.id)! : null;
+    const blocked = this.positions.size > 0 || this.plays.size > 0 || this.context?.state === "suspended" || !!element && (element.paused || element.seeking || element.readyState < 2);
+    // An overdue RAF in a silent gap must stop at the next source, not jump
+    // over an entire short clip before it has ever had a chance to play.
+    const nextStart = Math.min(Infinity,...project.clips.filter(clip => clip.frozenAt === undefined && this.elements.has(clip.id))
+      .map(clip => Math.max(0,transitionWindow(project,clip)?.start ?? clip.start)).filter(start => start > transport.clock.time+.000001));
+    return transport.clock.sample(now,element && master ? Math.min(master.end,Math.max(master.start,mediaToTimeline(master.clip,element.currentTime))) : undefined,blocked,nextStart);
+  }
   async ensure(project: Project) {
     if (this.disposed) return;
     // A paused preview otherwise caches the fallback-font frame indefinitely.
@@ -235,7 +307,6 @@ export class MediaPool {
   }
   async enableAudio(exporting = false) {
     if (this.disposed) return;
-    this.exporting = exporting;
     if (!this.context) {
       this.context = new AudioContext();
       if (exporting)
@@ -269,95 +340,72 @@ export class MediaPool {
   }
   sync(project: Project, time: number, playing: boolean) {
     const seeks: Promise<void>[] = [];
-    const joins = project.clips.flatMap((incoming) => {
-      if (incoming.kind !== "video") return [];
-      const window = transitionWindow(project, incoming);
-      return window && time >= window.start && time < window.end ? [{ incoming, window }] : [];
-    });
-    for (const c of project.clips) {
-      const el = this.elements.get(c.id);
-      if (!el) continue;
-      const asset = project.assets.find((a) => a.id === c.assetId);
-      const visibleOnTrack =
-        c.kind === "video"
-          ? project.clips
-              .filter(
-                (other) =>
-                  other.kind === "video" &&
-                  other.track === c.track &&
-                  time >= other.start &&
-                  time < endOf(other),
-              )
-              .sort((a, b) => a.start - b.start)
-              .at(-1)
-          : null;
-      const active =
-        c.kind === "video"
-          ? visibleOnTrack?.id === c.id
-          : time >= c.start && time < endOf(c);
-      const incomingWindow = joins.find((join) => join.incoming.id === c.id)?.window;
-      const incomingMix = incomingWindow
-        ? clamp((time - incomingWindow.start) / incomingWindow.duration, 0, 1) : null;
-      const outgoingWindow = joins.find((join) => join.window.previous.id === c.id)?.window;
-      const outgoingMix = outgoingWindow
-        ? clamp((time - outgoingWindow.start) / outgoingWindow.duration, 0, 1) : null;
-      const inTransition = incomingMix !== null || outgoingMix !== null;
-      if (!active && !inTransition) {
-        el.pause();
-        const gain = this.gains.get(c.id);
-        if (gain) this.setAudioValue(gain.gain, 0, false);
-        continue;
-      }
+    const states = previewMediaStates(project,time);
+    const active = new Set(states.map(state => state.clip.id));
+    for (const [id,el] of this.elements) if (!active.has(id)) {
+      el.pause();
+      const gain = this.gains.get(id);
+      if (gain) this.setAudioValue(gain.gain,0,false);
+    }
+    for (const {clip:c} of states) {
+      const el = this.elements.get(c.id); if (!el) continue;
+      const asset = project.assets.find(a => a.id === c.assetId);
       const sourceTime = clamp(
         c.frozenAt ?? (c.sourceStart + (time - c.start) * c.speed),
         0,
         Math.max(0, (asset?.duration ?? el.duration) - 0.002),
       );
       el.playbackRate = c.speed;
-      if (
-        Math.abs(el.currentTime - sourceTime) > (playing ? 0.18 : 0.008) &&
-        !el.seeking
-      ) {
-        const seek = ready(el, "seeked", 10000, this.controllers.get(c.id)?.signal).catch((error) => {
-          if ((error as Error).name !== "AbortError") throw error;
-        });
-        el.currentTime = sourceTime;
-        seeks.push(seek);
+      if (this.positions.has(c.id) || el.seeking || Math.abs(el.currentTime-sourceTime) > (playing ? .04*c.speed : .008)) {
+        const positioned = this.position(c.id,el,sourceTime);
+        if (positioned) seeks.push(positioned);
       }
-      const animated = animatedItem(c, time);
-      const audioStart = incomingMix !== null ? incomingWindow!.start : c.start;
-      const audioEnd = outgoingMix !== null ? outgoingWindow!.end : endOf(c);
-      const fade = Math.min(
-        animated.fadeIn > 0 ? clamp((time - audioStart) / animated.fadeIn, 0, 1) : 1,
-        animated.fadeOut > 0 ? clamp((audioEnd - time) / animated.fadeOut, 0, 1) : 1,
-      );
-      const transitionGain = incomingMix !== null ? incomingMix : outgoingMix !== null ? 1 - outgoingMix : 1;
+    }
+    // A decoder seek pauses the whole transport, not just one audible layer.
+    // Otherwise another song keeps playing while the playhead waits for video.
+    const waitingForData = playing && (this.context?.state === "suspended" || states.some(({clip}) => {
+      const element = this.elements.get(clip.id);
+      return clip.frozenAt === undefined && !!element && element.readyState < 2;
+    }));
+    if (playing && (seeks.length || waitingForData)) {
+      for (const el of this.elements.values()) el.pause();
+    }
+    const starts: Promise<void>[] = [];
+    const generation = this.playbackGeneration;
+    for (const {clip:c} of states) {
+      const el = this.elements.get(c.id); if (!el) continue;
+      const asset = project.assets.find(a => a.id === c.assetId);
+      const exhausted = el.ended && el.currentTime >= Math.max(0,el.duration-.01);
+      if (playing && !seeks.length && !waitingForData && c.frozenAt === undefined && !exhausted) {
+        let playback = this.plays.get(c.id);
+        if (!playback && el.paused) {
+          playback = el.play().catch(error => {
+            if ((error as Error).name === "AbortError" || this.disposed || generation !== this.playbackGeneration) return;
+            throw new Error(`Could not start playback of “${asset?.name ?? c.label}”: ${(error as Error).message}`);
+          }).finally(() => {
+            if (this.plays.get(c.id) === playback) this.plays.delete(c.id);
+          });
+          this.plays.set(c.id,playback);
+        }
+        if (playback) starts.push(playback);
+      }
+      if (!playing || c.frozenAt !== undefined) el.pause();
+    }
+    const blocked = playing && (waitingForData || seeks.length > 0 || starts.length > 0);
+    if (this.transport) this.transport.blocked = blocked;
+    for (const {clip:c,volume,pan:panValue} of states) {
       const gain = this.gains.get(c.id);
       if (gain) {
-        const volume =
-          (active || inTransition) && c.frozenAt === undefined &&
-          !project.mutedTracks.includes(trackKey(c)) &&
-          !project.hiddenTracks.includes(trackKey(c))
-            ? animated.volume * fade * transitionGain
-            : 0;
-        this.setAudioValue(gain.gain, Number.isFinite(volume) ? clamp(volume, 0, 3) : 0, playing);
+        this.setAudioValue(gain.gain,blocked ? 0 : volume,playing && !blocked);
       }
       const pan = this.pans.get(c.id);
-      if (pan) this.setAudioValue(pan.pan, clamp(Number(animated.audioPan) || 0, -1, 1), playing);
-      const exhausted = el.ended && sourceTime >= Math.max(0, el.duration - 0.01);
-      if (playing && (active || inTransition) && c.frozenAt === undefined && el.paused && !exhausted) {
-        const playback = el.play().catch((error) => {
-          if (this.exporting && !this.disposed && this.elements.get(c.id) === el)
-            throw new Error(`Could not play “${asset?.name ?? c.label}” during export: ${(error as Error).message}`);
-          /* Subsequent user playback can resume a blocked preview element. */
-        });
-        if (this.exporting) seeks.push(playback);
-      }
-      if (!playing || (!active && !inTransition) || c.frozenAt !== undefined) el.pause();
+      if (pan) this.setAudioValue(pan.pan,panValue,playing && !blocked);
     }
-    return Promise.all(seeks);
+    return Promise.all([...seeks,...starts]);
   }
   pause() {
+    this.playbackGeneration++;
+    this.transport = null;
     for (const el of this.elements.values()) el.pause();
     for (const gain of this.gains.values()) this.setAudioValue(gain.gain, 0, false);
   }
@@ -377,12 +425,15 @@ export class MediaPool {
     this.gains.delete(id);
     this.pans.delete(id);
     this.elements.delete(id);
+    this.positions.delete(id);
+    this.plays.delete(id);
     this.sources.delete(id);
     this.revision++;
     this.urls.delete(id);
     this.pending.delete(id);
   }
   dispose() {
+    this.pause();
     this.disposed = true;
     for (const id of [...this.urls.keys()]) this.remove(id);
     if (this.context && this.context.state !== "closed") void this.context.close().catch(() => {});

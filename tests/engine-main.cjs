@@ -15,8 +15,12 @@ app.whenReady().then(async () => {
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: false,
+      offscreen: true,
     },
   });
+  window.webContents.setFrameRate(60);
+  window.webContents.on('paint',()=>{});
+  window.webContents.startPainting();
   window.webContents.on("console-message", (_event, _level, message) =>
     process.stdout.write(String(message) + "\n"),
   );
@@ -31,9 +35,9 @@ app.whenReady().then(async () => {
     );
     const suite = process.env.CUTLINE_ENGINE_SUITE;
     const result =
-      await window.webContents.executeJavaScript(suite === "scenes" ? "runSceneTests()" : suite === "text-sequence" ? "runTextSequenceTests()" : suite === "deletion" ? "runDeletionTests()" : suite === "exports" ? "runOfflineExportTests()" : "runEngineTests()");
+      await window.webContents.executeJavaScript(suite === "playback" ? "runPlaybackTests()" : suite === "scenes" ? "runSceneTests()" : suite === "text-sequence" ? "runTextSequenceTests()" : suite === "deletion" ? "runDeletionTests()" : suite === "exports" ? "runOfflineExportTests()" : "runEngineTests()");
     await writeFile(
-      suite === "scenes" ? "work/scene-engine-results.json" : suite === "text-sequence" ? "work/text-sequence-engine-results.json" : suite === "deletion" ? "work/deletion-engine-results.json" : suite === "exports" ? "work/offline-export-engine-results.json" : "work/engine-results.json",
+      suite === "playback" ? "work/playback-engine-results.json" : suite === "scenes" ? "work/scene-engine-results.json" : suite === "text-sequence" ? "work/text-sequence-engine-results.json" : suite === "deletion" ? "work/deletion-engine-results.json" : suite === "exports" ? "work/offline-export-engine-results.json" : "work/engine-results.json",
       JSON.stringify(result, null, 2),
     );
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");
