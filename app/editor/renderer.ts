@@ -25,7 +25,8 @@ import {
   normalizeCompositing, type BlendMode, type MaskFrame, type VisualCompositing,
 } from "./visualCompositing";
 
-export type MediaSources = Map<string, HTMLVideoElement | HTMLImageElement>;
+type MediaSource = HTMLVideoElement | HTMLImageElement | HTMLCanvasElement | OffscreenCanvas;
+export type MediaSources = Map<string, MediaSource>;
 export type Bounds = {
   id: string;
   kind: "clip" | "text";
@@ -39,9 +40,9 @@ export type Bounds = {
 };
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
 const surface = () => document.createElement("canvas");
-const sourceSize = (source: HTMLVideoElement | HTMLImageElement | undefined, asset: Asset | undefined) => ({
-  width: source instanceof HTMLVideoElement ? source.videoWidth : source?.naturalWidth || asset?.width || 0,
-  height: source instanceof HTMLVideoElement ? source.videoHeight : source?.naturalHeight || asset?.height || 0,
+const sourceSize = (source: MediaSource | undefined, asset: Asset | undefined) => ({
+  width: source instanceof HTMLVideoElement ? source.videoWidth : source instanceof HTMLImageElement ? source.naturalWidth : source?.width || asset?.width || 0,
+  height: source instanceof HTMLVideoElement ? source.videoHeight : source instanceof HTMLImageElement ? source.naturalHeight : source?.height || asset?.height || 0,
 });
 export class Renderer {
   private gradeRenderer = new ColorGradeRenderer();
@@ -304,7 +305,7 @@ export class Renderer {
     asset: Asset | undefined,
     c: Clip,
     time: number,
-    source: HTMLVideoElement | HTMLImageElement | undefined,
+    source: MediaSource | undefined,
     w: number,
     h: number,
     supportFrame = false,

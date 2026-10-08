@@ -1,6 +1,22 @@
-# Cutline 0.8.3
+# Cutline 0.8.4
 
 A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files and raw audio stay local; the optional assistant receives project metadata, requested images, transcripts and audio-analysis results.
+
+## Frame-accurate export (new in 0.8.4)
+
+Exports now render every frame at an explicit timestamp with WebCodecs and Mediabunny rather than recording live canvas playback. Slow decoding or heavy effects increase render time instead of skipping timeline frames. Quality-mode encoding uses backpressure, and the exporter checks the encoded frame count and timestamps before returning a file. MP4/H.264 and WebM/VP9/VP8 use a constant chosen frame rate, with at most one frame of padding for an edit that ends between frames. No real-time fallback silently degrades the result.
+
+Original video frames are decoded independently for each clip, including trimmed, sped-up, frozen and transition source positions. Audio is decoded and mixed in bounded windows on the same timeline, preserving layers, mute, volume automation, fades, stereo pan and two-sided transition crossfades. Basic waveform-similarity tempo processing preserves pitch for speed changes; extreme retiming can still produce audio artifacts. Silent and sub-second edits no longer rely on a live recorder starting in time. Unsupported input/output codecs produce an error rather than missing frames or silently lost audio.
+
+This removes render-load-induced frame dropping, not every possible cause of choppy playback. Low-frame-rate or already-stuttering source footage is not repaired; there is no optical-flow frame interpolation. Playing demanding 4K/60 fps files still requires a capable player/device. Keep the app open and the PC awake until export finishes. Encoded files are currently assembled in memory, so long/high-bitrate edits can require substantial RAM.
+
+Verification: 93 unit/component checks, 15 font/Codex protocol checks and the full 89-check render/export suite pass, plus type checking, scoped lint and server rendering. Stress checks deliberately stall rendering and inspect output packet counts/timestamps at 30/60 fps. An isolated production Windows UI export from the packaged app produced exactly 960 frames at 60 fps over 16 seconds, with audio, native saving and working Cancel. Packaged deletion/Undo/project-reset checks also pass. This does not certify every device, source codec, long project or 4K performance.
+
+## Media and project deletion (new in 0.8.4)
+
+Use the trash button on a card in **Media** or **Audio** to remove it from the current project. Confirmation shows how many timeline clips use it; deleting removes those clips and their automatic guides in one undoable edit. Unlock any affected layers first. Undo restores the media and clips, including after autosave. Other projects and original files on your PC are untouched.
+
+Open **Project → My projects** and use a project's trash button to permanently delete that saved project. Save a backup first if needed: project deletion cannot be undone. Deleting the open project starts a fresh workspace. Only imported media copies no remaining saved project uses are reclaimed; shared media, original files and exported videos are kept. Autosave cannot recreate a deleted project.
 
 ## Customizable text sequences (new in 0.8.3)
 
@@ -143,11 +159,11 @@ Imported stills fit inside the canvas by default; existing stills using the form
 
 ## Limits
 
-Very short, silent static-image edits (under one second) can fail in the current real-time encoder. The error advises extending the edit to at least two seconds. A two-second static masked export is covered by the encoded-output check; sub-second video-only export is not certified.
+The new offline exporter covers silent sub-second edits with exact frame-count checks; edits ending between output frames are padded by at most one frame.
 
 Whip transitions combined with non-Normal blend modes can have a darker blurred edge at the moving join; use Normal blend mode for the unmodified whip treatment. Smooth crossfade treatments (including Blur and Cross zoom) use separate coverage weighting to avoid that double-alpha edge issue.
 
-This is not a complete CapCut replacement. Pixel-perfect automatic subject cutout/tracking, freehand or Bezier masks, optical-flow retiming, proxy editing, multicam, scene-linear HDR/RAW grading, professional waveform/vectorscope instruments, audio time-stretch processing, and an offline render pipeline are not included. The object detector finds familiar classes in a single frame and can be inaccurate; verify its bounding box before applying a crop/mask. Auto subtitles require a first-time model download and may need correction, especially with noisy or overlapping speech. Export is real-time using Canvas, Web Audio and MediaRecorder. Keep the window open and the computer awake. Long edits, 4K/60 fps and stacked effects can consume substantial memory or drop frames; 1080p/30 fps is the practical starting point. Backups larger than 1 GB are rejected. Source codec support depends on the browser/Electron build.
+This is not a complete CapCut replacement. Pixel-perfect automatic subject cutout/tracking, freehand or Bezier masks, optical-flow retiming, proxy editing, multicam, scene-linear HDR/RAW grading and professional waveform/vectorscope instruments are not included. The object detector finds familiar classes in a single frame and can be inaccurate; verify its bounding box before applying a crop/mask. Auto subtitles require a first-time model download and may need correction, especially with noisy or overlapping speech. Export renders frames offline using Canvas, WebCodecs and Mediabunny; unsupported sources/codecs fail with an error. Keep the app open and the computer awake. Long edits, 4K/60 fps and stacked effects require more render time and memory; 1080p/30 fps is the practical starting point. Output playback performance depends on the player/device and original source cadence. Backups larger than 1 GB are rejected.
 
 Web projects and PC projects use separate local storage. Transfer edits using a `.cutline` backup. Clearing browser/app data can remove local projects; keep backups of important work. Imported source files themselves are never modified.
 
@@ -175,6 +191,8 @@ npm run desktop:dist
 The 0.8.1 checks add model-supported effort forwarding/default reset, image-input limits and text-only model rejection, measured audio levels, bounded trim/speed/time mappings and strict media tool validation. `electron tests/codex-media-desktop.cjs` runs the real production Windows UI, preload/IPC bridge and local workers with a test-only Codex transport: original image bounds, distinct decoded video frames, reference downsampling and forwarding, rhythmic audio analysis, unchanged project revisions, permission refusal/revocation, stop cancellation and small-window composer geometry. It does not claim AI inference was performed. The real account connection/catalog is separately checked without sending an inference request. For optional real local speech verification, generate a synthetic WAV with `tests/codex-speech-fixture.ps1`, then set `CUTLINE_SPEECH_TEST=1` for the media test; this explicitly downloads/caches free Tiny in the isolated test profile and checks a nonempty timestamped transcript. Large v3 GPU inference is not separately exercised by these checks.
 
 ## Verification for this release
+
+For 0.8.4, all 108 unit/component/protocol checks and 89 render/export checks pass, plus the server-rendered shell, type checking and scoped lint. Tests inspect exact encoded frame count/cadence, source trim/speed/duplicate decoding, synchronized audio beats, pitch-preserving speed, short static edits, IndexedDB deletion/shared-media preservation and stale autosave refusal. The packaged Windows app passes a real 16-second 60 fps export with 960 frames, native save and Cancel, plus deletion/Undo/project-reset and small-window layout checks. Earlier live AI and Whisper model checks were not repeated. Long projects, 4K performance and every device/source codec remain uncertified.
 
 For 0.8.3, all 103 unit/component/protocol checks and 81 rendering/export checks pass, plus the server-rendered shell (185 total), type checking and scoped lint. New checks verify all sequence presets on entrance/exit, real pixel changes from customization, Unicode grouping, mixed animation stacks, stable Typewriter bounds, native inspector controls, saved recipes, per-layer reset and actual encoded video. The encoder now allows its asynchronous final canvas capture to reach the recorder before stopping. Production checks exercise the packaged app archive in an isolated profile at 1100×700 and 1480×920; the same harness can verify an installed archive without accessing normal projects. The website retains its desktop/mobile/200%-zoom gallery and download checks. These checks do not certify every device, font, codec or long-project workload; earlier live AI and Whisper model checks were not repeated.
 

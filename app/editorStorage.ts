@@ -105,17 +105,86 @@ export async function deleteMediaAsset(assetId: string) {
   database.close();
 }
 
-export async function saveProject(project: PersistedProject) {
+function referencedMedia(projects: PersistedProject[]) {
+  return new Set(projects.flatMap(project => project.assets.map(asset => asset.id)));
+}
+
+export async function saveProject(project: PersistedProject, availableMedia: PersistedMedia[] = []) {
   const database = await openDatabase();
-  const transaction = database.transaction(
-    [PROJECT_STORE, ARCHIVE_STORE],
-    "readwrite",
-  );
-  transaction.objectStore(PROJECT_STORE).put(project, CURRENT_PROJECT_KEY);
-  if ("id" in project)
-    transaction.objectStore(ARCHIVE_STORE).put(project, project.id);
-  await waitForTransaction(transaction);
-  database.close();
+  let failure: Error | undefined;
+  try {
+    const transaction = database.transaction([PROJECT_STORE, ARCHIVE_STORE, MEDIA_STORE], "readwrite");
+    const done = waitForTransaction(transaction), archives = transaction.objectStore(ARCHIVE_STORE), media = transaction.objectStore(MEDIA_STORE);
+    const removedMediaIds: string[] = [];
+    if ("id" in project) {
+      const deleted = transaction.objectStore(PROJECT_STORE).get(`deleted:${project.id}`);
+      deleted.onsuccess = () => {
+        if (deleted.result) { failure = new Error("This project was deleted. Open another project or import a backup."); transaction.abort(); }
+      };
+    }
+    // Undo may restore an asset whose unused stored copy was reclaimed. Write
+    // only missing blobs; normal autosaves do not repeatedly clone large files.
+    const used = new Set(project.assets.map(asset => asset.id));
+    for (const asset of availableMedia) if (used.has(asset.id)) {
+      const key = media.getKey(asset.id);
+      key.onsuccess = () => { if (key.result === undefined) media.put(asset); };
+    }
+    const request = archives.getAll();
+    request.onsuccess = () => {
+      const saved = request.result as PersistedProject[];
+      const previous = "id" in project ? saved.find(p => "id" in p && p.id === project.id) : undefined;
+      const remaining = saved.filter(p => !("id" in project && "id" in p && p.id === project.id));
+      const retained = referencedMedia([...remaining, project]);
+      for (const asset of previous?.assets ?? []) if (!retained.has(asset.id)) {
+        media.delete(asset.id); removedMediaIds.push(asset.id);
+      }
+      transaction.objectStore(PROJECT_STORE).put(project, CURRENT_PROJECT_KEY);
+      if ("id" in project) archives.put(project, project.id);
+    };
+    await done;
+    return { removedMediaIds };
+  } catch (error) { throw failure ?? error; }
+  finally { database.close(); }
+}
+
+/** Delete exactly one saved project and only blobs no remaining project uses. */
+export async function deleteSavedProject(id: string, replacement?: PersistedProject) {
+  const database = await openDatabase();
+  let failure: Error | undefined;
+  try {
+    const transaction = database.transaction([PROJECT_STORE, ARCHIVE_STORE, MEDIA_STORE], "readwrite");
+    const done = waitForTransaction(transaction), archives = transaction.objectStore(ARCHIVE_STORE), currentStore = transaction.objectStore(PROJECT_STORE);
+    const projectsRequest = archives.getAll(), currentRequest = currentStore.get(CURRENT_PROJECT_KEY);
+    let pending = 2; const removedMediaIds: string[] = [];
+    const apply = () => {
+      if (--pending) return;
+      const projects = projectsRequest.result as PersistedProject[], current = currentRequest.result as PersistedProject | undefined;
+      const target = projects.find(p => "id" in p && p.id === id);
+      if (!target) { failure = new Error("This project no longer exists."); transaction.abort(); return; }
+      const active = current && "id" in current && current.id === id;
+      if (active && (!replacement || !("id" in replacement) || replacement.id === id)) {
+        failure = new Error("Choose a new workspace before deleting the open project."); transaction.abort(); return;
+      }
+      const remaining = projects.filter(p => !("id" in p && p.id === id));
+      if (active && replacement && "id" in replacement && remaining.some(p => "id" in p && p.id === replacement.id)) {
+        failure = new Error("Deleting a project cannot replace another saved project."); transaction.abort(); return;
+      }
+      const nextCurrent = active ? replacement : current;
+      const retained = referencedMedia([...remaining, ...(nextCurrent ? [nextCurrent] : [])]);
+      archives.delete(id);
+      currentStore.put({ deletedAt: Date.now() }, `deleted:${id}`);
+      if (active && replacement && "id" in replacement) {
+        currentStore.put(replacement, CURRENT_PROJECT_KEY); archives.put(replacement, replacement.id);
+      }
+      for (const asset of target.assets) if (!retained.has(asset.id)) {
+        transaction.objectStore(MEDIA_STORE).delete(asset.id); removedMediaIds.push(asset.id);
+      }
+    };
+    projectsRequest.onsuccess = apply; currentRequest.onsuccess = apply;
+    await done;
+    return { removedMediaIds };
+  } catch (error) { throw failure ?? error; }
+  finally { database.close(); }
 }
 
 export async function listProjects(): Promise<PersistedProject[]> {

@@ -40,6 +40,7 @@ import {
   ExternalLink,
   Layers2,
   Grip,
+  Trash2,
 } from "lucide-react";
 import { Timeline } from "./editor/Timeline";
 import { Preview } from "./editor/Preview";
@@ -89,6 +90,7 @@ import { textAnimationTiming } from "./editor/textAnimation";
 import { detachClipAudio, isTrackLocked, removeSelection, selectionItems } from "./editor/timelineOperations";
 import { LibraryPreview } from "./editor/LibraryPreview";
 import { pruneEffectKeyframes } from "./editor/effectStack";
+import { mediaDeletionInfo, removeProjectMedia } from "./editor/mediaDeletion";
 const NAV = [
   { name: "Media", icon: Film },
   { name: "Audio", icon: Music2 },
@@ -118,6 +120,7 @@ export default function Editor() {
     dispatch,
     addMedia,
     load,
+    removeProject,
     restore,
     backup,
     importBackup,
@@ -145,6 +148,13 @@ export default function Editor() {
       null,
     ),
     [archives, setArchives] = useState<PersistedProject[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "media" | "project"; id: string; name: string; projectId: string } | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const deletionInFlight = useRef(false);
+  const deletionInfo = deleteTarget?.kind === "media" ? mediaDeletionInfo(project, deleteTarget.id) : null;
+  const requestDelete = (target: NonNullable<typeof deleteTarget>) => {
+    setDeleteError(""); setPlaying(false); setDeleteTarget(target);
+  };
   const [subtitleClipId, setSubtitleClipId] = useState("");
   const [beatsOpen,setBeatsOpen]=useState(false);
   const [scenesOpen, setScenesOpen] = useState(false);
@@ -620,6 +630,30 @@ export default function Editor() {
       setBusy("");
     }
   }
+  async function confirmDeletion() {
+    if (!deleteTarget || deletionInFlight.current || busy || exporting || subtitleProgress) return;
+    const target = deleteTarget;
+    deletionInFlight.current = true; setDeleteError("");
+    try {
+      if (target.projectId !== project.id) throw new Error("The open project changed. Cancel and select the item again.");
+      if (target.kind === "media") {
+        if (mediaDeletionInfo(project, target.id).locked) throw new Error("Unlock the layers using this media before deleting it.");
+        edit(p => removeProjectMedia(p, target.id));
+        const retained = selected.filter(item => item.kind !== "clip" || !project.clips.some(clip => clip.id === item.id && clip.assetId === target.id));
+        selectMany(retained);
+        notify("Media removed from this project. Undo restores it and its clips.");
+      } else {
+        setBusy("Deleting project");
+        const result = await removeProject(target.id);
+        if (result.active) { select(null); setTime(0); setExportResult(null); }
+        setArchives(previous => previous.filter(p => !("id" in p && p.id === target.id)));
+        void listProjects().then(setArchives).catch(error => notify("Project deleted, but the list could not refresh: " + error.message));
+        notify("Project deleted. Other projects and original files are unchanged.");
+      }
+      setDeleteTarget(null);
+    } catch (error) { setDeleteError((error as Error).message); }
+    finally { deletionInFlight.current = false; setBusy(""); }
+  }
   async function startExport() {
     if (!formats[formatIndex]) return;
     setExportError("");
@@ -655,7 +689,7 @@ export default function Editor() {
       abort.current = null;
     }
   }
-  const codex = useCodex({ project, ready, blocked: !!busy || !!exporting || !!subtitleProgress || scenesOpen || dialog === "projects", time, selected, canUndo, canRedo, edit, dispatch, seek, select, openExport });
+  const codex = useCodex({ project, ready, blocked: !!busy || !!exporting || !!subtitleProgress || !!deleteTarget || scenesOpen || dialog === "projects", time, selected, canUndo, canRedo, edit, dispatch, seek, select, openExport });
   return (
     <main
       className={"editor-app" + (desktop ? " desktop-app" : "")}
@@ -950,6 +984,12 @@ export default function Editor() {
                           <span className="asset-add">
                             <Plus size={16} />
                           </span>
+                        </button>
+                        <button className="asset-delete" aria-label={`Delete ${asset.name} from project`} title="Delete media from this project"
+                          disabled={!ready || !!busy || !!exporting || !!subtitleProgress}
+                          draggable={false} onDragStart={event => { event.preventDefault(); event.stopPropagation(); }}
+                          onClick={() => requestDelete({ kind: "media", id: asset.id, name: asset.name, projectId: project.id })}>
+                          <Trash2 size={13} />
                         </button>
                         <strong title={asset.name}>{asset.name}</strong>
                         <small className="asset-meta"><span>{asset.kind === "audio" ? "Audio" : asset.kind === "image" ? "Image" : "Video"}</span><span>{asset.sizeLabel}</span></small>
@@ -1491,8 +1531,8 @@ export default function Editor() {
               </strong>
               <progress max="1" value={exporting.progress} />
               <p>
-                Rendering happens in real time on your device. Keep this window
-                open and your computer awake.
+                Every frame is rendered and encoded in order. Heavy effects take
+                longer instead of dropping frames. Keep the app open until finished.
               </p>
               <button
                 className="button secondary"
@@ -1586,9 +1626,9 @@ export default function Editor() {
               <div className="export-note">
                 <HardDrive size={17} />
                 <p>
-                  Local, real-time encoding. Performance depends on your
-                  computer; 4K, 60 fps, and stacked effects are more demanding.
-                  Only supported formats are shown.
+                  Local, frame-by-frame encoding at a constant frame rate.
+                  4K, 60 fps, and stacked effects take longer to render—not fewer
+                  frames. Codec support is checked before rendering.
                 </p>
               </div>
               {!formats.length && (
@@ -1635,8 +1675,8 @@ export default function Editor() {
               </p>
             )}
             {archives.map((p, i) => (
+              <div className="saved-project-row" data-project-id={"id" in p ? p.id : undefined} key={"id" in p ? p.id : i}>
               <button
-                key={"id" in p ? p.id : i}
                 className="saved-project"
                 onClick={() => void switchProject(restore(p))}
               >
@@ -1656,6 +1696,12 @@ export default function Editor() {
                   <ExternalLink size={16} />
                 )}
               </button>
+              {"id" in p && <button className="project-delete" aria-label={`Delete project ${p.name || "Untitled project"}`} title="Delete project"
+                disabled={!!busy || !!exporting || !!subtitleProgress}
+                onClick={() => requestDelete({ kind: "project", id: p.id, name: p.name || "Untitled project", projectId: project.id })}>
+                <Trash2 size={17} />
+              </button>}
+              </div>
             ))}
           </div>
           <div className="dialog-actions">
@@ -1718,13 +1764,31 @@ export default function Editor() {
             </div>
             <p className="honest-note">
               Media stays local. Browser storage is separate from the PC app;
-              use a .cutline backup to transfer projects. Export is real-time.
+              use a .cutline backup to transfer projects. Export renders every frame.
               Use masks to shape or reveal a clip. Lock layers to protect edits,
               detach audio from a video, and snap clips to beat or moment markers.
             </p>
           </div>
         </Dialog>
       )}
+      {deleteTarget && <Dialog title={deleteTarget.kind === "media" ? "Delete media?" : "Delete project?"}
+        subtitle={deleteTarget.kind === "media" ? "Remove from this project, not from your PC." : "Permanently remove this saved project from this device."}
+        close={() => { if (!deletionInFlight.current) setDeleteTarget(null); }}>
+        <div className="delete-confirmation">
+          <p><strong>{deleteTarget.name}</strong></p>
+          {deleteTarget.kind === "media" ? <>
+            <p>{deletionInfo?.clipCount ? `This media is used by ${deletionInfo.clipCount} timeline clip${deletionInfo.clipCount === 1 ? "" : "s"}. Those clips will also be removed.` : "This media isn’t used on the timeline."} You can Undo this change. Other projects and your original file are untouched.</p>
+            {deletionInfo?.locked && <p className="deletion-error" role="alert">Unlock the layers using this media before deleting it.</p>}
+          </> : <p>This deletes the project and its unused imported copies. Media shared with other saved projects is kept. Original files and exported videos are untouched. This cannot be undone—save a project backup first if you need it.</p>}
+          {deleteError && <p className="deletion-error" role="alert">{deleteError}</p>}
+        </div>
+        <div className="dialog-actions">
+          <button className="button secondary" disabled={!!busy} onClick={() => setDeleteTarget(null)}>Cancel</button>
+          <button className="button destructive" disabled={!!busy || !!exporting || !!subtitleProgress || !!deletionInfo?.locked} onClick={() => void confirmDeletion()}>
+            <Trash2 size={15} /> {busy ? "Deleting…" : deleteTarget.kind === "media" ? "Delete media" : "Delete project"}
+          </button>
+        </div>
+      </Dialog>}
     </main>
   );
 }

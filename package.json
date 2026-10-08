@@ -1,6 +1,6 @@
 {
   "name": "cutline-video-editor",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "A private, watermark-free local video editor for Windows.",
   "author": "Cutline",
   "main": "electron/main.cjs",
@@ -38,6 +38,7 @@
     "drizzle-orm": "0.45.2",
     "fflate": "^0.8.3",
     "lucide-react": "^1.30.0",
+    "mediabunny": "1.61.3",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },

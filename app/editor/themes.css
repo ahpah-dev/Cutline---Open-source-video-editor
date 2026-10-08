@@ -141,3 +141,16 @@ input[type="range"]::-webkit-slider-thumb {background:var(--mint)}
 .text-sequence-controls { border-block: 1px solid var(--line); padding: 16px 0 4px; margin: 12px 0 17px; }
 .animation-reset { margin: 6px 0 12px; font-size: 11px; }
 .animation-choice-grid { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; padding: 2px 4px 2px 2px; scrollbar-width: thin; }
+.asset-card { position: relative; }
+.asset-card .asset-add { left: 5px; right: auto; }
+.asset-delete { position: absolute; right: 5px; top: 5px; z-index: 1; display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); cursor: pointer; }
+.asset-delete:hover,.asset-delete:focus-visible,.project-delete:hover,.project-delete:focus-visible { color: #ff9fa6; background: #542b35; border-color: #a55964; }
+.saved-project-row { display: flex; align-items: center; gap: 5px; border-bottom: 1px solid var(--line); }
+.saved-project-row .saved-project { min-width: 0; flex: 1; border: 0; }
+.project-delete { flex-shrink: 0; display: grid; place-items: center; width: 36px; height: 36px; margin-right: 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel-raised); color: var(--muted); }
+.delete-confirmation { padding: 4px 24px 14px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.delete-confirmation strong { color: var(--text); overflow-wrap: anywhere; }
+.delete-confirmation p { margin: 12px 0; }
+.delete-confirmation .deletion-error { color: #e07d8b; }
+.button.destructive { background: #90394b; border-color: #aa5060; color: #fff; }
+.button.destructive:hover { background: #a64355; }

@@ -49,6 +49,8 @@ import { runSceneDetectionChecks } from "./scene-detection-engine";
 import { runTextSequenceChecks } from "./text-sequence-engine";
 import { runColorGradingChecks } from "./color-grading-engine";
 import { runTextFontChecks } from "./text-fonts-engine";
+import { runDeletionChecks } from "./deletion-engine";
+import { runOfflineExportChecks } from "./offline-export-engine";
 import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "../app/editor/codexTypes";
 
 const assert = (condition: unknown, message: string) => {
@@ -1365,6 +1367,8 @@ export async function runEngineTests() {
   await runTransitionTests(check, assert);
   await runSceneDetectionChecks(check, assert);
   await runTextSequenceChecks(check, assert);
+  await runDeletionChecks(check, assert);
+  await runOfflineExportChecks(check, assert);
   return { passed, failures, details };
 }
 (
@@ -1389,3 +1393,26 @@ async function runTextSequenceTests() {
   return { passed, failures };
 }
 (globalThis as typeof globalThis & { runTextSequenceTests: typeof runTextSequenceTests }).runTextSequenceTests = runTextSequenceTests;
+
+async function runDeletionTests() {
+  const passed: string[] = [], failures: string[] = [];
+  await runDeletionChecks(async (name, run) => {
+    console.log(`DELETION CHECK: ${name}`);
+    try { await run(); passed.push(name); } catch (error) { failures.push(`${name}: ${String((error as Error).stack ?? error)}`); }
+  }, assert);
+  return { passed, failures };
+}
+(globalThis as typeof globalThis & { runDeletionTests: typeof runDeletionTests }).runDeletionTests = runDeletionTests;
+
+async function runOfflineExportTests() {
+  const passed: string[] = [], failures: string[] = [];
+  const check = async (name: string, run: () => unknown) => {
+    console.log(`OFFLINE EXPORT CHECK: ${name}`);
+    try { await run(); passed.push(name); } catch (error) { failures.push(`${name}: ${String((error as Error).stack ?? error)}`); }
+  };
+  await runOfflineExportChecks(check, assert);
+  await runAudioReliabilityChecks(check);
+  await runTextSequenceChecks(check, assert);
+  return { passed, failures };
+}
+(globalThis as typeof globalThis & { runOfflineExportTests: typeof runOfflineExportTests }).runOfflineExportTests = runOfflineExportTests;

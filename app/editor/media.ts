@@ -1,7 +1,6 @@
 import {
   animatedItem,
   clamp,
-  dimensions,
   endOf,
   projectDuration,
   trackKey,
@@ -10,7 +9,7 @@ import {
   type Asset,
   type Project,
 } from "./model";
-import { Renderer, type MediaSources } from "./renderer";
+import type { MediaSources } from "./renderer";
 import { analyzeAudioWaveform } from "./waveform";
 import { ensureTextFonts } from "./textFonts";
 
@@ -410,8 +409,8 @@ export const exportFormats = () =>
     },
   ].filter(
     (f) =>
-      typeof MediaRecorder !== "undefined" &&
-      MediaRecorder.isTypeSupported(f.mime),
+      typeof VideoEncoder !== "undefined" &&
+      (typeof MediaRecorder === "undefined" || MediaRecorder.isTypeSupported(f.mime)),
   );
 
 export async function exportProject(
@@ -424,7 +423,7 @@ export async function exportProject(
     onProgress: (progress: number, phase: string) => void;
   },
 ) {
-  const { signal, onProgress } = options;
+  const { signal } = options;
   const check = () => {
     if (signal.aborted)
       throw new DOMException("Export cancelled", "AbortError");
@@ -433,8 +432,8 @@ export async function exportProject(
   if (!Number.isFinite(options.resolution) || options.resolution < 144 || options.resolution > 4320 ||
       !Number.isFinite(options.fps) || options.fps < 1 || options.fps > 120)
     throw new Error("Choose a supported resolution and frame rate before exporting.");
-  if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported(options.mime))
-    throw new Error("This video format is unavailable. Choose one of the supported export formats.");
+  if (typeof VideoEncoder === "undefined" || !exportFormats().some(format=>format.mime===options.mime))
+    throw new Error("Frame-accurate export is unavailable. Use the Windows app or a current Chromium browser in a secure context.");
   const duration = projectDuration(project);
   const missing = project.clips
     .map((c) => project.assets.find((a) => a.id === c.assetId))
@@ -450,123 +449,9 @@ export async function exportProject(
     );
   if (duration <= 0)
     throw new Error("Add a video, audio, or text clip before exporting.");
-  const canvas = document.createElement("canvas");
-  Object.assign(canvas, dimensions(project.ratio, options.resolution));
-  const renderer = new Renderer(),
-    pool = new MediaPool();
-  let recorder: MediaRecorder | null = null,
-    stream: MediaStream | null = null;
-  let frame = 0;
-  let rejectAbort: (error: DOMException) => void = () => {};
-  const aborted = () => rejectAbort(new DOMException("Export cancelled", "AbortError"));
-  const abortPromise = new Promise<never>((_, reject) => {
-    rejectAbort = reject;
-    signal.addEventListener("abort", aborted, { once: true });
-  });
-  // Handle cancellation even during loading, and keep all recorders and tracks scoped to this export.
-  try {
-    onProgress(0, "Preparing media");
-    await Promise.race([pool.ensure(project), abortPromise]);
-    check();
-    await Promise.race([document.fonts.ready, abortPromise]);
-    await Promise.race([pool.prepareExport(project), abortPromise]);
-    await Promise.race([pool.enableAudio(true), abortPromise]);
-    await Promise.race([pool.sync(project, 0, false), abortPromise]);
-    check();
-    renderer.draw(canvas, project, 0, pool.sources);
-    // Request explicit captures at the chosen frame rate, including unchanged
-    // still-image/text frames that automatic canvas capture may omit.
-    stream = canvas.captureStream(options.fps);
-    const videoTrack = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
-    for (const track of pool.destination?.stream.getAudioTracks() ?? [])
-      stream.addTrack(track);
-    recorder = new MediaRecorder(stream, {
-      mimeType: options.mime,
-      videoBitsPerSecond:
-        options.resolution >= 2160
-          ? 24000000
-          : options.resolution >= 1080
-            ? 10000000
-            : 5000000,
-      audioBitsPerSecond: 192000,
-    });
-    const chunks: Blob[] = [];
-    const stopped = new Promise<void>((resolve, reject) => {
-      recorder!.ondataavailable = (e) => {
-        if (e.data.size) chunks.push(e.data);
-      };
-      recorder!.onstop = () => resolve();
-      recorder!.onerror = () =>
-        reject(new Error("The encoder failed. Try 720p or the WebM format."));
-    });
-    recorder.start(250);
-    const started = performance.now();
-    let capturedFrame = -1;
-    const render = new Promise<void>((resolve, reject) => {
-      const tick = () => {
-        try {
-          check();
-          const elapsed = Math.min(duration, (performance.now() - started) / 1000);
-          void pool.sync(project, Math.min(elapsed, duration - 0.001), true).catch(reject);
-          const frameIndex = Math.min(Math.ceil(duration * options.fps) - 1, Math.floor(elapsed * options.fps));
-          if (frameIndex !== capturedFrame) {
-            renderer.draw(canvas, project, Math.min(elapsed, duration - 0.001), pool.sources);
-            videoTrack.requestFrame?.();
-            capturedFrame = frameIndex;
-          }
-          onProgress(elapsed / duration, "Rendering your video");
-          if (elapsed >= duration) resolve();
-          else frame = requestAnimationFrame(tick);
-        } catch (error) { reject(error); }
-      };
-      tick();
-    });
-    await Promise.race([
-      render,
-      stopped.then(() => {
-        throw new Error("The encoder stopped before the video was finished.");
-      }),
-      abortPromise,
-    ]);
-    pool.pause();
-    onProgress(1, "Finishing video");
-    // Canvas capture is asynchronous. Give the final requested frame a chance
-    // to reach the recorder before stopping, including text-only/silent edits.
-    videoTrack.requestFrame?.();
-    let finalFrameTimer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        new Promise<void>((resolve) => { finalFrameTimer = setTimeout(resolve, Math.max(50, 2000 / options.fps)); }),
-        abortPromise,
-      ]);
-    } finally { clearTimeout(finalFrameTimer); }
-    check();
-    recorder.stop();
-    let flushTimer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([stopped, abortPromise, new Promise<never>((_, reject) => {
-        flushTimer = setTimeout(() => reject(new Error("The encoder could not finish the video. Try a lower resolution or another format.")), 30000);
-      })]);
-    } finally { clearTimeout(flushTimer); }
-    check();
-    const blob = new Blob(chunks, { type: options.mime });
-    if (!blob.size)
-      throw new Error(
-        duration < 1 ? "The encoder could not finish this very short video. Extend the edit to at least 2 seconds and retry."
-          : "The encoder produced an empty video. Try another format.",
-      );
-    onProgress(1, "Video ready");
-    return blob;
-  } finally {
-    signal.removeEventListener("abort", aborted);
-    cancelAnimationFrame(frame);
-    pool.dispose();
-    renderer.dispose();
-    if (recorder && recorder.state !== "inactive") {
-      try { recorder.stop(); } catch { /* Preserve the original cancellation or encoder failure. */ }
-    }
-    stream?.getTracks().forEach((track) => track.stop());
-  }
+  const { renderOffline } = await import("./offlineExport");
+  check();
+  return renderOffline(project,options);
 }
 
 export async function saveBlob(blob: Blob, name: string) {

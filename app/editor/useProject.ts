@@ -4,6 +4,7 @@ import {
   loadProject,
   saveProject,
   saveMediaAsset,
+  deleteSavedProject,
   type PersistedMedia,
   type PersistedProject,
   type PersistedAsset,
@@ -144,6 +145,19 @@ export function useProject(onError: (message: string) => void) {
   const queuedWaveforms = useRef(new Set<string>());
   const waveformQueue = useRef(Promise.resolve());
   const current = useRef(state.project);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const deletedProjects = useRef(new Set<string>());
+  const persist = useCallback((project: Project) => {
+    const saving = saveQueue.current.then(async () => {
+      if (deletedProjects.current.has(project.id)) return;
+      const available = project.assets.flatMap(asset => {
+        const media = blobs.current.get(asset.id); return media ? [media] : [];
+      });
+      await saveProject(persistable(project), available);
+    });
+    saveQueue.current = saving.catch(() => {});
+    return saving;
+  }, []);
   useEffect(() => {
     current.current = state.project;
   }, [state.project]);
@@ -203,7 +217,7 @@ export function useProject(onError: (message: string) => void) {
     let active = true;
     const timer = setTimeout(() => {
       setSaveState("Saving…");
-      void saveProject(persistable(state.project))
+      void persist(state.project)
         .then(() => {
           if (active) setSaveState("Saved on this device");
         })
@@ -218,15 +232,15 @@ export function useProject(onError: (message: string) => void) {
       active = false;
       clearTimeout(timer);
     };
-  }, [state.project, state.origin, ready, onError]);
+  }, [state.project, state.origin, ready, onError, persist]);
   useEffect(() => {
     return window.cutlineDesktop?.onBeforeClose(async () => {
-      if (ready) await saveProject(persistable(current.current));
+      if (ready) await persist(current.current);
     });
-  }, [ready]);
+  }, [ready, persist]);
   useEffect(() => {
     const save = () => {
-      if (ready) void saveProject(persistable(current.current)).catch(() => {});
+      if (ready) void persist(current.current).catch(() => {});
     };
     const beforeUnload = (event: BeforeUnloadEvent) => {
       save();
@@ -241,7 +255,7 @@ export function useProject(onError: (message: string) => void) {
       window.removeEventListener("pagehide", save);
       window.removeEventListener("beforeunload", beforeUnload);
     };
-  }, [ready, saveState]);
+  }, [ready, saveState, persist]);
   const edit = useCallback(
     (fn: (p: Project) => Project, group = "") =>
       dispatch({ type: "edit", fn, group, at: Date.now() }),
@@ -256,10 +270,34 @@ export function useProject(onError: (message: string) => void) {
     if (asset.url) urls.current.set(asset.id, asset.url);
   }, []);
   const load = useCallback(async (p: Project) => {
-    await saveProject(persistable(current.current));
-    await saveProject(persistable(p));
+    await persist(current.current);
+    await persist(p);
+    current.current = p;
     dispatch({ type: "load", project: p });
-  }, []);
+  }, [persist]);
+  const removeProject = useCallback(async (id: string) => {
+    // Flush first so deletion includes newly imported media, then fence every
+    // queued/autosave/close callback from resurrecting the deleted project.
+    await persist(current.current);
+    const active = current.current.id === id;
+    const replacement = active ? newProject() : undefined;
+    deletedProjects.current.add(id);
+    const deleting = saveQueue.current.then(() => deleteSavedProject(id, replacement && persistable(replacement)));
+    saveQueue.current = deleting.then(() => {}, () => {});
+    try {
+      const result = await deleting;
+      if (replacement) {
+        current.current = replacement;
+        dispatch({ type: "load", project: replacement });
+        for (const assetId of result.removedMediaIds) {
+          const url = urls.current.get(assetId);
+          if (url) URL.revokeObjectURL(url);
+          urls.current.delete(assetId); blobs.current.delete(assetId);
+        }
+      }
+      return { active };
+    } catch (error) { deletedProjects.current.delete(id); throw error; }
+  }, [persist]);
   const backup = useCallback(async () => {
     const p = current.current,
       files: Record<string, Uint8Array> = {
@@ -350,6 +388,7 @@ export function useProject(onError: (message: string) => void) {
     dispatch,
     addMedia,
     load,
+    removeProject,
     restore,
     backup,
     importBackup,
