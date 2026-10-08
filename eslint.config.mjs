@@ -12,6 +12,7 @@ const eslintConfig = defineConfig([
     ".next/**",
     "dist/**",
     "dist-desktop/**",
+    "dist-native/**",
     "outputs/**",
     "work/**",
     ".wrangler/**",

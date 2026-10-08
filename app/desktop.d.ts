@@ -1,4 +1,4 @@
-import type { CodexEvent, CodexImage, CodexStatus, CodexToolRequest, CodexToolResult } from "./editor/codexTypes";
+import type { AIConnection, CustomAPISettings, CodexEvent, CodexImage, CodexStatus, CodexToolRequest, CodexToolResult } from "./editor/codexTypes";
 
 declare global {
   interface Window {
@@ -6,7 +6,9 @@ declare global {
       isDesktop: true;
       platform: string;
       version: () => Promise<string>;
-      codexConnect: (tools: unknown[]) => Promise<CodexStatus>;
+      codexConnect: (tools: unknown[], connection?:AIConnection) => Promise<CodexStatus>;
+      apiSettings: () => Promise<CustomAPISettings>;
+      forgetAPI: () => Promise<CustomAPISettings>;
       codexStatus: () => Promise<CodexStatus>;
       codexLogin: () => Promise<void>;
       codexSend: (prompt: string, projectId: string, model?: string, effort?:string, images?:CodexImage[]) => Promise<{ threadId: string }>;

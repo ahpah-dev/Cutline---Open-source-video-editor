@@ -1309,6 +1309,8 @@ export async function runEngineTests() {
       finishVideoExport: async () => ({ filePath: "test.mp4", size: 1 }), cancelVideoExport: async () => {},
       confirmNewProject: async () => true, onBeforeClose: () => () => {},
       codexStatus: async () => state,
+      apiSettings: async () => ({name:"9Router",baseURL:"http://localhost:20128/v1",model:"",images:false,reasoning:false,hasKey:false,encryptionAvailable:true}),
+      forgetAPI: async () => ({name:"9Router",baseURL:"http://localhost:20128/v1",model:"",images:false,reasoning:false,hasKey:false,encryptionAvailable:true}),
       codexConnect: async () => { state.connected = true; onEvent?.({ type: "status", ...state }); return state; },
       codexLogin: async () => {}, codexSend: async () => ({ threadId: "test" }), codexStop: async () => {}, codexReset: async () => {}, codexDisconnect: async () => {},
       codexToolActive: async () => toolActive,
@@ -1327,7 +1329,7 @@ export async function runEngineTests() {
       for (let i = 0; i < 80 && (!onTool || !host.querySelector('[aria-label="Play"]:not([disabled])')); i++) await wait(20);
       assert(onTool, "Editor did not subscribe to Codex tools");
       host.querySelector<HTMLButtonElement>(".codex-toggle")!.click(); await wait(30);
-      assert(host.querySelector('[aria-label="Codex video assistant"]'), "Codex panel missing");
+      assert(host.querySelector('[aria-label="AI video assistant"]'), "AI panel missing");
       host.querySelector<HTMLButtonElement>(".codex-connect")!.click(); await wait(30);
       assert(host.querySelector('[aria-label="Describe your video edit"]'), "Chat did not open after connect");
       const catalog = await call("get_catalog", {});

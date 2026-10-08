@@ -397,6 +397,26 @@ summary::-webkit-details-marker {
 .codex-toggle.active { border-color: #78d8b7; color: #94e9c9; background: #20332e; }
 .codex-status-dot, .codex-connected i { width: 6px; height: 6px; border-radius: 50%; background: #8deac7; display: inline-block; }
 .codex-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #16191e; border-left: 1px solid var(--line); overflow: hidden; font-size: 12px; }
+.ai-provider { display: flex; align-items: center; gap: 10px; padding: 10px 16px; color: #a5b2c2; border-bottom: 1px solid var(--line); flex-shrink: 0; font-size: 10px; }
+.ai-provider select { min-width: 0; flex: 1; }
+.custom-api-settings { border-bottom: 1px solid var(--line); overflow: auto; max-height: 48%; flex-shrink: 0; }
+.custom-api-settings:not([open]) { overflow: visible; }
+.custom-api-settings summary { cursor: pointer; padding: 12px 16px; color: #d2dce6; font-weight: 600; }
+.custom-api-settings summary span { float: right; color: #8ba99d; font-size: 10px; font-weight: 400; }
+.custom-api-fields { padding: 0 16px 16px; }
+.custom-api-fields p, .custom-api-fields small { color: #91a0b3; font-size: 10px; line-height: 1.7; display: block; }
+.custom-api-fields fieldset { border: 0; padding: 0; margin: 12px 0; display: grid; gap: 12px; min-width: 0; }
+.custom-api-fields label { display: grid; gap: 6px; color: #c4d0de; font-size: 11px; }
+.custom-api-fields label > span { color: #8092a7; font-size: 9px; }
+.custom-api-fields input:not([type=checkbox]), .custom-api-fields select, .ai-provider select { width: 100%; padding: 8px 10px; color: #dae4ee; border: 1px solid #35414e; border-radius: 7px; background: #10151c; font-size: 11px; }
+.custom-api-fields .custom-api-check { display: flex; align-items: center; gap: 8px; line-height: 1.5; }
+.custom-api-check input { accent-color: #8deac7; flex-shrink: 0; }
+.custom-api-fields :disabled, .ai-provider :disabled { opacity: .65; }
+.custom-api-fields input:focus-visible, .custom-api-fields select:focus-visible, .ai-provider select:focus-visible { outline: 2px solid #85d9b8; outline-offset: 2px; }
+.custom-api-forget { background: transparent; border: 0; color: #b2c0d0; padding: 4px 0; text-decoration: underline; font-size: 10px; cursor: pointer; }
+.custom-api-welcome { flex: 1; min-height: 100px; padding-top: 20px; }
+.custom-api-disconnected .custom-api-settings { flex: 1; min-height: 0; max-height: none; }
+.custom-api-disconnected .custom-api-welcome { display: none; }
 .codex-panel-header { padding: 15px 16px; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .codex-mark { width: 31px; height: 31px; display: grid; place-items: center; background: #263931; border: 1px solid #3b594c; border-radius: 9px; color: #9aebca; }
 .codex-panel-header > div { flex: 1; }

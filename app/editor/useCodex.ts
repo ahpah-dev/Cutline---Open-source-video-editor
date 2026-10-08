@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch } from "react";
 import { flushSync } from "react-dom";
 import { CODEX_TOOLS, applyCodexEdits, editingCatalog, projectRevision, projectSnapshot, validate } from "./codexEditing";
-import type { CodexEvent, CodexImage, CodexStatus, CodexToolRequest, CodexToolResult } from "./codexTypes";
+import type { AIConnection, CodexEvent, CodexImage, CodexStatus, CodexToolRequest, CodexToolResult } from "./codexTypes";
 import { analyzeClipAudio, captureSource, SPEECH_MODELS } from "./codexMedia";
 import { dimensions, roundFrame, type Project, type Selection } from "./model";
 import { MediaPool } from "./media";
@@ -193,12 +193,12 @@ export function useCodex(options: Options) {
     }).catch(() => {});
     return () => { cancelled = true; toolAbort.current?.abort(); };
   }, [projectId]);
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (connection?:AIConnection) => {
     const native = window.cutlineDesktop;
     if (!native || connecting) return;
-    setConnecting(true); setError(""); setActivity("Connecting to Codex…");
-    try { setStatus(await native.codexConnect(CODEX_TOOLS)); }
-    catch (error) { setError((error as Error).message); }
+    setConnecting(true); setError(""); setActivity(connection?.provider === "custom" ? "Connecting to your API…" : "Connecting to Codex…");
+    try { setStatus(await native.codexConnect(CODEX_TOOLS, connection)); setMessages([]); setModel(""); setEffort(""); return true; }
+    catch (error) { setError((error as Error).message); return false; }
     finally { setConnecting(false); setActivity(""); }
   }, [connecting]);
   const login = async () => {

@@ -6,23 +6,27 @@ const {
   Menu,
   shell,
   session,
+  safeStorage,
 } = require("electron");
 const { writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { listInstalledFonts } = require("./fonts.cjs");
 const { CodexConnection } = require("./codex.cjs");
+const { APISettings } = require("./api-settings.cjs");
 const { randomUUID } = require("node:crypto");
 const { ExportFiles } = require("./export-files.cjs");
 const exportFiles = new ExportFiles();
 let codex = null;
+let connectingAI = false;
+const apiSettings = () => new APISettings(app.getPath("userData"), safeStorage);
 const codexTools = new Map();
 function cancelCodexTools() {
   for (const pending of codexTools.values()) { clearTimeout(pending.timer); pending.reject(new Error("Editing cancelled.")); }
   codexTools.clear();
 }
-function getCodex() {
-  if (!codex) codex = new CodexConnection({
+function assistantOptions() {
+  return {
     userData: app.getPath("userData"), version: app.getVersion(),
     emit: (event) => {
       if (event.type === "status" && !event.connected) cancelCodexTools();
@@ -35,7 +39,10 @@ function getCodex() {
       codexTools.set(id, { resolve, reject, timer });
       mainWindow.webContents.send("codex:tool-request", { id, name, args, projectId: codex.projectId });
     }),
-  });
+  };
+}
+function getCodex() {
+  if (!codex) codex = new CodexConnection(assistantOptions());
   return codex;
 }
 
@@ -244,7 +251,30 @@ ipcMain.handle("fonts:list", (event, refresh = false) => {
   return listInstalledFonts(refresh === true);
 });
 
-ipcMain.handle("codex:connect", (event, tools) => { requireTrustedSender(event); return getCodex().connect(tools); });
+ipcMain.handle("codex:connect", async (event, tools, connection) => {
+  requireTrustedSender(event);
+  if (connectingAI || getCodex().state.busy) throw new Error("Stop or wait for the current AI operation first.");
+  connectingAI = true;
+  try {
+    cancelCodexTools();
+    getCodex().disconnect();
+    if (connection?.provider === "custom") {
+      const settings = apiSettings();
+      const config = await settings.resolve(connection);
+      const { CustomAPIConnection } = await import("../dist-native/custom-api.mjs");
+      codex = new CustomAPIConnection(assistantOptions());
+      const state = await codex.connect(tools, config);
+      try { await settings.save(config, connection.rememberKey === true); }
+      catch (error) { codex.disconnect(); throw error; }
+      return state;
+    }
+    if (connection?.provider && connection.provider !== "codex") throw new Error("Unknown AI provider.");
+    codex = new CodexConnection(assistantOptions());
+    return await codex.connect(tools);
+  } finally { connectingAI = false; }
+});
+ipcMain.handle("ai:settings", (event) => { requireTrustedSender(event); return apiSettings().publicSettings(); });
+ipcMain.handle("ai:forget", async (event) => { requireTrustedSender(event); cancelCodexTools(); getCodex().disconnect(); return apiSettings().forget(); });
 ipcMain.handle("codex:status", (event) => { requireTrustedSender(event); return getCodex().state; });
 ipcMain.handle("codex:send", (event, payload) => { requireTrustedSender(event); return getCodex().send(payload?.prompt, payload?.projectId, payload?.model, payload?.effort, payload?.images); });
 ipcMain.handle("codex:reset", (event) => { requireTrustedSender(event); cancelCodexTools(); getCodex().reset(); });

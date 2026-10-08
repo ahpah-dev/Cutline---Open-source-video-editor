@@ -793,8 +793,8 @@ export default function Editor() {
         </div>
         <div className="header-actions">
           <ThemePicker />
-          <button className={"button secondary codex-toggle" + (codexOpen ? " active" : "")} aria-pressed={codexOpen} onClick={() => setCodexOpen((value) => !value)} title="Edit your video with Codex">
-            <Sparkles size={15} /> Codex
+          <button className={"button secondary codex-toggle" + (codexOpen ? " active" : "")} aria-pressed={codexOpen} onClick={() => setCodexOpen((value) => !value)} title="Edit your video with Codex or a custom API">
+            <Sparkles size={15} /> AI editor
             {codex.status.connected && <i className="codex-status-dot" />}
           </button>
           <span className="local-badge">

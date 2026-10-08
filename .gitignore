@@ -36,6 +36,7 @@ yarn-error.log*
 
 /dist/
 /dist-desktop/
+/dist-native/
 /public/whisper-runtime/
 /.wrangler/
 /outputs/

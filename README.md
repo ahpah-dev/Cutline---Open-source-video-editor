@@ -1,6 +1,20 @@
-# Cutline 0.8.6
+# Cutline 0.8.7
 
-A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. The optional Codex assistant uses your Codex account and its usage limits. The hosted development site uses its existing private Sites access policy. Original source files and raw audio stay local; the optional assistant receives project metadata, requested images, transcripts and audio-analysis results.
+A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. Optional AI editing uses either your Codex account/usage limits or a custom API, whose provider may charge. The hosted development site uses its existing private Sites access policy. Original source files and raw audio stay local; the optional assistant receives project metadata, permitted images, transcripts and audio-analysis results.
+
+## Custom AI APIs and 9Router (new in 0.8.7)
+
+In the Windows app, open **AI editor → Connect with → Custom API**. The **9Router · local** preset uses `http://localhost:20128/v1`, as documented by [9Router](https://github.com/decolua/9router/blob/master/gitbook/content/en/integration/other-tools.md). Start/configure your router separately, paste its dashboard API key if required, then leave Model blank to discover available IDs or enter an exact model/router combo ID. Cutline does not install or modify your router, accounts or global Codex settings.
+
+Any endpoint implementing **OpenAI-compatible Chat Completions and function/tool calling** can be configured with its base URL, optional Bearer API key and model ID. Use HTTPS for remote servers; HTTP is restricted to localhost, 127.0.0.1 or ::1. Responses-only, Anthropic-native and other incompatible protocols are not supported by this adapter. Discovery sends only GET `/models` and generates no tokens; manual model IDs are verified on the first message, not on Connect. Model availability, tool support, limits and fees depend on your provider.
+
+Enable **Model supports image input** only for vision-capable models; requested preview/source frames and reference images are real image inputs. Enable **API supports reasoning_effort** only for compatible models; Auto omits the parameter, while Low/Medium/High sends it explicitly. Capabilities are user-declared, not guessed from generic model listings. Speech and rhythm tools still run locally with the existing media/transcription permissions; raw audio is not sent.
+
+Both connections use the same bounded Cutline tools: read the live project/catalog, apply precise revision-checked atomic batches, inspect frames, analyze allowed media, Undo/Redo and open the user-controlled export dialog. No shell, source-code editing or unrestricted filesystem tools are offered. Custom API requests use JSON (no streaming requirement), sequential tools, a 24-step/64-tool-call limit, bounded conversation history, cancellation, timeouts and no automatic retries. Already-applied batches remain undoable if a later step fails or is stopped. Text-only models that cannot call the required tools produce a clear error, not a simulated edit.
+
+**Remember key** uses Windows credential encryption (Electron safeStorage/DPAPI), never a plaintext fallback. Leaving it off keeps the key in memory for the connection only. Settings are separate from projects and backups; saved keys are not returned to the UI and are never reused for a different base URL. Disconnect to change settings; **Forget connection & saved key** removes the stored desktop connection. The configured endpoint/router and downstream providers receive prompts and permitted project/media context and may charge even though Cutline is free.
+
+The native SDK adapter is bundled and loaded only when Custom API is connected; no SDK is added to the editor's renderer bundle. Build it with `node scripts/build-native.mjs` (included in `npm run desktop:build` and `npm run test:unit`). To run the mock end-to-end Windows test after a desktop build: `electron tests/custom-api-desktop.cjs`. It uses an isolated profile and a local test server, never user credentials or paid API calls.
 
 ## Seek/playback synchronization (new in 0.8.6)
 

@@ -310,4 +310,4 @@ class CodexConnection {
     this.state = { ...this.state, connected: false, busy: false }; this.emit({ type: "status", ...this.state });
   }
 }
-module.exports = { CodexConnection, findCodex, extractCodex, installCodex, supportedCodexVersion, CODEX_VERSION };
+module.exports = { CodexConnection, findCodex, extractCodex, installCodex, supportedCodexVersion, CODEX_VERSION, TOOL_NAMES, INSTRUCTIONS, MEDIA_INSTRUCTIONS, validateImages };
