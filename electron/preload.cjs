@@ -48,6 +48,10 @@ contextBridge.exposeInMainWorld("cutlineDesktop", {
   },
   saveFile: (suggestedName, bytes) =>
     ipcRenderer.invoke("file:save", { suggestedName, bytes }),
+  beginVideoExport: (suggestedName) => ipcRenderer.invoke("export:begin", suggestedName),
+  writeVideoExport: (token, position, bytes) => ipcRenderer.invoke("export:write", { token, position, bytes }),
+  finishVideoExport: (token, size) => ipcRenderer.invoke("export:finish", { token, size }),
+  cancelVideoExport: (token) => ipcRenderer.invoke("export:cancel", token),
   confirmNewProject: () => ipcRenderer.invoke("project:confirm-new"),
   onBeforeClose: (callback) => {
     const listener = async () => {

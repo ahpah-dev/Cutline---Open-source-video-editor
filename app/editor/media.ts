@@ -12,6 +12,7 @@ import {
 import type { MediaSources } from "./renderer";
 import { analyzeAudioWaveform } from "./waveform";
 import { ensureTextFonts } from "./textFonts";
+import type { ExportOptions, ExportSink } from "./offlineExport";
 
 function ready(element: HTMLMediaElement, event: string, timeout = 20000, signal?: AbortSignal) {
   if (signal?.aborted) return Promise.reject(new DOMException("Media loading cancelled", "AbortError"));
@@ -413,15 +414,11 @@ export const exportFormats = () =>
       (typeof MediaRecorder === "undefined" || MediaRecorder.isTypeSupported(f.mime)),
   );
 
+export function exportProject(project: Project, options: ExportOptions & {sink:ExportSink}): Promise<number>;
+export function exportProject(project: Project, options: ExportOptions): Promise<Blob>;
 export async function exportProject(
   project: Project,
-  options: {
-    resolution: number;
-    fps: number;
-    mime: string;
-    signal: AbortSignal;
-    onProgress: (progress: number, phase: string) => void;
-  },
+  options: ExportOptions & {sink?:ExportSink},
 ) {
   const { signal } = options;
   const check = () => {
@@ -451,7 +448,7 @@ export async function exportProject(
     throw new Error("Add a video, audio, or text clip before exporting.");
   const { renderOffline } = await import("./offlineExport");
   check();
-  return renderOffline(project,options);
+  return options.sink ? renderOffline(project,{...options,sink:options.sink}) : renderOffline(project,options);
 }
 
 export async function saveBlob(blob: Blob, name: string) {

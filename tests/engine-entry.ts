@@ -1304,6 +1304,8 @@ export async function runEngineTests() {
       onMaximizedChange: () => () => {}, onFullscreenChange: () => () => {},
       minimize: () => {}, maximize: () => {}, close: () => {}, toggleFullscreen: () => {},
       listInstalledFonts: async () => ["Test Installed Font"], saveFile: async () => ({ canceled: true }),
+      beginVideoExport: async () => ({ canceled: true }), writeVideoExport: async () => {},
+      finishVideoExport: async () => ({ filePath: "test.mp4", size: 1 }), cancelVideoExport: async () => {},
       confirmNewProject: async () => true, onBeforeClose: () => () => {},
       codexStatus: async () => state,
       codexConnect: async () => { state.connected = true; onEvent?.({ type: "status", ...state }); return state; },

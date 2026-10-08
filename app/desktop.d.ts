@@ -26,6 +26,10 @@ declare global {
       isMaximized: () => Promise<boolean>;
       onMaximizedChange: (callback: (maximized: boolean) => void) => () => void;
       saveFile: (suggestedName: string, bytes: ArrayBuffer) => Promise<{ canceled: boolean; filePath?: string }>;
+      beginVideoExport: (suggestedName: string) => Promise<{ canceled: boolean; token?: string; filePath?: string }>;
+      writeVideoExport: (token: string, position: number, bytes: ArrayBuffer) => Promise<void>;
+      finishVideoExport: (token: string, size: number) => Promise<{ filePath: string; size: number }>;
+      cancelVideoExport: (token: string) => Promise<void>;
       confirmNewProject: () => Promise<boolean>;
       onBeforeClose: (callback: () => Promise<void>) => () => void;
     };

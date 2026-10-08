@@ -82,6 +82,7 @@ import {
   inspectFile,
   saveBlob,
 } from "./editor/media";
+import { exportToDisk } from "./editor/diskExport";
 import { useProject } from "./editor/useProject";
 import { listProjects, type PersistedProject } from "./editorStorage";
 import { decodeClipAudio, wordsToCaptions, type WhisperChunk } from "./editor/whisper";
@@ -179,8 +180,10 @@ export default function Editor() {
       phase: string;
     } | null>(null),
     [exportResult, setExportResult] = useState<{
-      blob: Blob;
+      blob?: Blob;
       name: string;
+      size: number;
+      filePath?: string;
     } | null>(null);
   const abort = useRef<AbortController | null>(null),
     files = useRef<HTMLInputElement>(null),
@@ -663,15 +666,25 @@ export default function Editor() {
     setExporting({ progress: 0, phase: "Preparing media" });
     try {
       const format = formats[formatIndex];
-      const blob = await exportProject(project, {
+      const name = safeName(project.name) + "." + format.extension;
+      const options = {
         resolution,
         fps: exportFps,
         mime: format.mime,
         signal: controller.signal,
-        onProgress: (progress, phase) => setExporting({ progress, phase }),
-      });
-      const name = safeName(project.name) + "." + format.extension;
-      setExportResult({ blob, name });
+        onProgress: (progress: number, phase: string) => setExporting({ progress, phase }),
+      };
+      if (window.cutlineDesktop?.beginVideoExport) {
+        const saved = await exportToDisk(project, options, name);
+        setExporting(null);
+        if (saved) {
+          setExportResult({ name, size: saved.size, filePath: saved.filePath });
+          notify("Video saved directly to disk — no watermark.");
+        } else notify("Save cancelled. No video was rendered or changed.");
+        return;
+      }
+      const blob = await exportProject(project, options);
+      setExportResult({ blob, name, size: blob.size });
       setExporting(null);
       if (await saveBlob(blob, name)) notify("Video saved — no watermark.");
       else
@@ -1536,6 +1549,7 @@ export default function Editor() {
               </p>
               <button
                 className="button secondary"
+                disabled={exporting.phase === "Saving finished video — please wait"}
                 onClick={() => abort.current?.abort()}
               >
                 Cancel export
@@ -1546,25 +1560,27 @@ export default function Editor() {
               <span>
                 <Check size={34} />
               </span>
-              <h3>Your video is ready.</h3>
+              <h3>{exportResult.filePath ? "Your video is saved." : "Your video is ready."}</h3>
               <p>
                 {exportResult.name}
                 <br />
-                {(exportResult.blob.size / 1024 / 1024).toFixed(1)} MB ·
+                {(exportResult.size / 1024 / 1024).toFixed(1)} MB ·
                 watermark-free
               </p>
+              {exportResult.filePath && <p style={{overflowWrap:"anywhere"}}>{exportResult.filePath}</p>}
               <button
                 className="button primary"
-                onClick={() =>
+                onClick={() => {
+                  if (!exportResult.blob) { setExportResult(null); return; }
                   void saveBlob(exportResult.blob, exportResult.name)
                     .then((saved) => {
                       if (saved) notify("Video saved.");
                     })
-                    .catch((e) => notify(e.message))
-                }
+                    .catch((e) => notify(e.message));
+                }}
               >
                 <Download size={16} />
-                Save video again
+                {exportResult.blob ? "Save video again" : "Export another video"}
               </button>
               <button
                 className="button secondary"
@@ -1629,6 +1645,7 @@ export default function Editor() {
                   Local, frame-by-frame encoding at a constant frame rate.
                   4K, 60 fps, and stacked effects take longer to render—not fewer
                   frames. Codec support is checked before rendering.
+                  {desktop ? " Choose a destination first. Encoded video writes directly to disk in small chunks; an existing file is replaced only after export succeeds." : " Browser downloads assemble the output in memory. Use the Windows app for disk-backed exports of long projects."}
                 </p>
               </div>
               {!formats.length && (

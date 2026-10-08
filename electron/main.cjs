@@ -13,6 +13,8 @@ const { pathToFileURL } = require("node:url");
 const { listInstalledFonts } = require("./fonts.cjs");
 const { CodexConnection } = require("./codex.cjs");
 const { randomUUID } = require("node:crypto");
+const { ExportFiles } = require("./export-files.cjs");
+const exportFiles = new ExportFiles();
 let codex = null;
 const codexTools = new Map();
 function cancelCodexTools() {
@@ -110,6 +112,10 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+  const exportOwner = mainWindow.webContents.id;
+  mainWindow.webContents.on("destroyed", () => { void exportFiles.abandon(exportOwner).catch(console.error); });
+  mainWindow.webContents.on("render-process-gone", () => { void exportFiles.abandon(exportOwner).catch(console.error); });
+  mainWindow.webContents.on("did-start-loading", () => { void exportFiles.abandon(exportOwner).catch(console.error); });
   mainWindow.on("close", (event) => {
     if (closeApproved || process.env.CUTLINE_SMOKE_TEST === "1") return;
     event.preventDefault();
@@ -308,6 +314,35 @@ ipcMain.handle("file:save", async (event, payload) => {
   return { canceled: false, filePath: result.filePath };
 });
 
+ipcMain.handle("export:begin", async (event, suggestedName) => {
+  requireTrustedSender(event);
+  const owner = event.sender.id;
+  if (exportFiles.jobs.has(owner)) throw new Error("Finish or cancel the current export first.");
+  const name = path.basename(String(suggestedName || "Cutline.mp4"));
+  const extension = path.extname(name).slice(1).toLowerCase();
+  if (!["mp4", "webm"].includes(extension)) throw new Error("Unsupported export format.");
+  const result = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: "Choose where to export — writes directly to disk",
+    defaultPath: path.join(app.getPath("videos"), name),
+    filters: [{ name: extension === "mp4" ? "MP4 video" : "WebM video", extensions: [extension] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  requireTrustedSender(event);
+  return { canceled: false, ...await exportFiles.begin(owner, result.filePath) };
+});
+ipcMain.handle("export:write", (event, payload) => {
+  requireTrustedSender(event);
+  return exportFiles.write(event.sender.id, payload?.token, payload?.position, payload?.bytes);
+});
+ipcMain.handle("export:finish", (event, payload) => {
+  requireTrustedSender(event);
+  return exportFiles.commit(event.sender.id, payload?.token, payload?.size);
+});
+ipcMain.handle("export:cancel", (event, token) => {
+  requireTrustedSender(event);
+  return exportFiles.abort(event.sender.id, token);
+});
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   session.defaultSession.setPermissionRequestHandler(
@@ -323,3 +358,10 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 app.on("before-quit", () => { cancelCodexTools(); codex?.disconnect(); });
+let exportShutdown = false;
+app.on("before-quit", event => {
+  if (exportShutdown || !exportFiles.jobs.size) return;
+  event.preventDefault(); exportShutdown = true;
+  void Promise.all([...exportFiles.jobs.keys()].map(owner => exportFiles.abandon(owner)))
+    .catch(console.error).finally(() => app.quit());
+});

@@ -21,6 +21,25 @@ async function packets(blob:Blob) {
   } finally {input.dispose();}
 }
 export async function runOfflineExportChecks(check:Check,assert:Assert) {
+  await check("Disk-target MP4/VP9/VP8 exports honor seek-back writes, bounded chunks and slow-writer backpressure",async()=>{
+    const p={...newProject(),texts:[makeText(0,{text:"DISK TEST",duration:.6,comboAnimations:[{name:"Pulse",speed:1,amount:60}]})]};
+    for(const format of exportFormats()) {
+      const chunks:{data:Uint8Array<ArrayBuffer>;position:number}[]=[];let inFlight=0,maxInFlight=0;
+      const size=await exportProject(p,{resolution:144,fps:60,mime:format.mime,signal:new AbortController().signal,onProgress(){},sink:{async write(data,position){
+        inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);
+        assert(data.byteLength<=1024*1024,'Unbounded output chunk');
+        await new Promise(resolve=>setTimeout(resolve,12));chunks.push({data:data.slice(),position});inFlight--;
+      }}});
+      assert(size>0&&chunks.length>0&&maxInFlight===1,'Missing writes or overlapping unbounded writer');
+      const buffer=new Uint8Array(size);for(const chunk of chunks)buffer.set(chunk.data,chunk.position);
+      const list=await packets(new Blob([buffer],{type:format.mime}));
+      assert(list.length===36&&Math.abs(list.at(-1)!.timestamp+list.at(-1)!.duration-.6)<.002,'Streamed file is corrupt or lost frames');
+    }
+    const controller=new AbortController();let failed=false;
+    try { await exportProject(p,{resolution:144,fps:30,mime:exportFormats()[0].mime,signal:controller.signal,onProgress(){},sink:{async write(){throw new Error('Simulated disk full');}}}); }
+    catch(error){failed=(error as Error).message.includes('Simulated disk full');}
+    assert(failed,'Writer failure was swallowed');
+  });
   await check("Offline MP4/VP9/VP8 exports preserve every 30/60 fps frame, exact duration and cadence despite deliberate stalls",async()=>{
     const p={...newProject(),texts:[makeText(0,{text:"FRAME TEST",duration:.6,comboAnimations:[{name:"Pulse",speed:1,amount:60}]})]};
     for(const format of exportFormats())for(const fps of [30,60]){

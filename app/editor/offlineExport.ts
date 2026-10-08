@@ -1,4 +1,4 @@
-import { AudioBufferSource, BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, WebMOutputFormat, canEncodeAudio, canEncodeVideo } from "mediabunny";
+import { AudioBufferSource, BufferTarget, StreamTarget, CanvasSource, Mp4OutputFormat, Output, Quality, WebMOutputFormat, canEncodeAudio, canEncodeVideo } from "mediabunny";
 import { dimensions, projectDuration, type Project } from "./model";
 import { Renderer } from "./renderer";
 import { ensureTextFonts } from "./textFonts";
@@ -7,8 +7,11 @@ import { EXPORT_AUDIO_RATE, ExportAudio } from "./exportAudio";
 import { exportFrameCount, exportFrameTime } from "./exportTiming";
 
 export type ExportOptions={resolution:number;fps:number;mime:string;signal:AbortSignal;onProgress:(progress:number,phase:string)=>void};
+export type ExportSink={write:(data:Uint8Array<ArrayBuffer>,position:number)=>Promise<void>};
 
-export async function renderOffline(project:Project,options:ExportOptions) {
+export function renderOffline(project:Project,options:ExportOptions & {sink:ExportSink}):Promise<number>;
+export function renderOffline(project:Project,options:ExportOptions):Promise<Blob>;
+export async function renderOffline(project:Project,options:ExportOptions & {sink?:ExportSink}) {
   const {signal,onProgress}=options,check=()=>signal.throwIfAborted();check();
   const duration=projectDuration(project),{width,height}=dimensions(project.ratio,options.resolution);
   const mp4=options.mime.startsWith("video/mp4"),codec=mp4 ? "avc" : options.mime.includes("vp9") ? "vp9" : "vp8";
@@ -19,7 +22,16 @@ export async function renderOffline(project:Project,options:ExportOptions) {
   check();
   const canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;
   const renderer=new Renderer(),sources=new ExportSources(project,options.fps,signal),audio=new ExportAudio(project,sources,signal);
-  const output=new Output({format:mp4?new Mp4OutputFormat({fastStart:"in-memory"}):new WebMOutputFormat(),target:new BufferTarget()});
+  let writtenSize=0;
+  const target=options.sink ? new StreamTarget(new WritableStream({
+    async write(chunk) {
+      check();await options.sink!.write(chunk.data,chunk.position);check();
+      writtenSize=Math.max(writtenSize,chunk.position+chunk.data.byteLength);
+    },
+  }),{chunked:true,chunkSize:1024*1024}) : new BufferTarget();
+  // Regular MP4, with metadata at the end: no retained media payload and no
+  // fragmented-container compatibility tradeoff. Browser downloads keep Fast Start.
+  const output=new Output({format:mp4?new Mp4OutputFormat({fastStart:options.sink?false:"in-memory"}):new WebMOutputFormat(),target});
   let finished=false;
   let rejectAbort:(error:DOMException)=>void=()=>{};
   const aborted=new Promise<never>((_,reject)=>{rejectAbort=reject;});
@@ -67,7 +79,11 @@ export async function renderOffline(project:Project,options:ExportOptions) {
     await wait(output.finalize());check();finished=true;
     if (badTiming || encodedCount!==count || encodedFrames.size!==count || !encodedFrames.has(0) || !encodedFrames.has(count-1))
       throw new Error("The encoder did not preserve every frame at the requested frame rate. Export was rejected; try another format or a lower resolution.");
-    const buffer=output.target.buffer;
+    if (options.sink) {
+      if (!writtenSize) throw new Error("The encoder produced an empty video.");
+      return writtenSize;
+    }
+    const buffer=(target as BufferTarget).buffer;
     if (!buffer?.byteLength) throw new Error("The encoder produced an empty video. Try another format.");
     onProgress(1,"Video ready");return new Blob([buffer],{type:output.format.mimeType});
   } catch(error) {
