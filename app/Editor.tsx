@@ -85,7 +85,8 @@ import {
 import { exportToDisk } from "./editor/diskExport";
 import { useProject } from "./editor/useProject";
 import { listProjects, type PersistedProject } from "./editorStorage";
-import { decodeClipAudio, wordsToCaptions, type WhisperChunk } from "./editor/whisper";
+import { decodeClipAudio, wordsToCaptions, readSubtitleWordsPerLine, saveSubtitleWordsPerLine, type WhisperChunk } from "./editor/whisper";
+import { SubtitleLayoutControls } from "./editor/SubtitleLayoutControls";
 import WhisperWorker from "./editor/whisper.worker?worker";
 import { textAnimationTiming } from "./editor/textAnimation";
 import { detachClipAudio, isTrackLocked, removeSelection, selectionItems } from "./editor/timelineOperations";
@@ -160,6 +161,7 @@ export default function Editor() {
   const [beatsOpen,setBeatsOpen]=useState(false);
   const [scenesOpen, setScenesOpen] = useState(false);
   const [subtitleModel, setSubtitleModel] = useState("onnx-community/whisper-large-v3-ONNX");
+  const [subtitleWordsPerLine, setSubtitleWordsPerLine] = useState(readSubtitleWordsPerLine);
   const [subtitleProgress, setSubtitleProgress] = useState<{ message: string; percent: number | null } | null>(null);
   const [subtitleError, setSubtitleError] = useState("");
   const subtitleWorker = useRef<Worker | null>(null);
@@ -230,6 +232,7 @@ export default function Editor() {
       const audio = await decodeClipAudio(subtitleClip, asset);
       if (run !== subtitleRun.current) return;
       if (audio.length < 1600) throw new Error("This clip has no usable audio.");
+      const audioDuration = audio.length / 16000;
       const worker = new WhisperWorker();
       subtitleWorker.current = worker;
       const result = await new Promise<WhisperChunk[]>((resolve, reject) => {
@@ -241,7 +244,7 @@ export default function Editor() {
           if (data.type === "error") reject(new Error(data.message ?? "Transcription failed."));
           if (data.type === "done") {
             if (data.chunks?.length) resolve(data.chunks);
-            else if (data.text?.trim()) resolve([{ text: data.text, timestamp: [0, audio.length / 16000] }]);
+            else if (data.text?.trim()) resolve([{ text: data.text, timestamp: [0, audioDuration] }]);
             else reject(new Error("Whisper detected no speech in this clip."));
           }
         };
@@ -251,7 +254,7 @@ export default function Editor() {
       });
       if (run !== subtitleRun.current) return;
       const track = Math.max(project.layerCount, ...[...project.clips, ...project.texts].map((item) => item.track + 1));
-      const captions = wordsToCaptions(result, subtitleClip.start, clipDuration(subtitleClip), track);
+      const captions = wordsToCaptions(result, subtitleClip.start, clipDuration(subtitleClip), track, { wordsPerLine: subtitleWordsPerLine });
       if (!captions.length) throw new Error("Whisper found speech, but no timed captions could be created.");
       edit((p) => ({ ...p, layerCount: Math.max(p.layerCount, track + 1), texts: [...p.texts, ...captions] }));
       select({ kind: "text", id: captions[0].id });
@@ -1510,7 +1513,11 @@ export default function Editor() {
                 <option value="Xenova/whisper-tiny.en">English · Tiny</option>
               </select>
             </Field>
+            <SubtitleLayoutControls value={subtitleWordsPerLine} disabled={!!subtitleProgress} onChange={(value) => {
+              setSubtitleWordsPerLine(value); saveSubtitleWordsPerLine(value);
+            }} />
             <p className="field-note">{subtitleModel === "onnx-community/whisper-large-v3-ONNX" ? "Large v3 downloads about 1 GB once and uses your GPU; a WebGPU-capable graphics card is required." : "Tiny downloads approximately 50–100 MB and runs faster on modest PCs."} Transcription time depends on your clip length and PC. The generated captions are regular text clips, so you can fix any misheard words and style them.</p>
+            {subtitleModel === "onnx-community/whisper-large-v3-ONNX" && <p className="field-note">Large returns segment timestamps; timing within a segment is estimated when it is split into shorter captions. Tiny supplies word timestamps.</p>}
             {subtitleProgress && <div className="subtitle-progress" role="status"><LoaderCircle size={17} className="spin" /> {subtitleProgress.message}{subtitleProgress.percent !== null && ` ${Math.round(subtitleProgress.percent)}%`}</div>}
             {subtitleError && <div className="subtitle-error" role="alert">{subtitleError}</div>}
             <div className="dialog-actions">

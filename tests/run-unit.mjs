@@ -21,6 +21,8 @@ await build({
         mediaDeletion: "tests/media-deletion.test.ts",
         exportTiming: "tests/export-timing.test.ts",
         previewPlayback: "tests/preview-playback.test.ts",
+        background: "tests/background.test.tsx",
+        whisperLayout: "tests/whisper-layout.test.tsx",
       },
       formats: ["es"],
       fileName: (_format, name) => name + ".js",
@@ -35,7 +37,7 @@ await build({
 });
 const result = spawnSync(
   process.execPath,
-  ["--test", "work/unit-tests/model.js", "work/unit-tests/timeline.js", "work/unit-tests/codex.js", "work/unit-tests/compositing.js", "work/unit-tests/effects.js", "work/unit-tests/color.js", "work/unit-tests/beats.js", "work/unit-tests/codexMedia.js", "work/unit-tests/scenes.js", "work/unit-tests/textSequence.js", "work/unit-tests/mediaDeletion.js", "work/unit-tests/exportTiming.js", "work/unit-tests/previewPlayback.js"],
+  ["--test", "work/unit-tests/model.js", "work/unit-tests/timeline.js", "work/unit-tests/codex.js", "work/unit-tests/compositing.js", "work/unit-tests/effects.js", "work/unit-tests/color.js", "work/unit-tests/beats.js", "work/unit-tests/codexMedia.js", "work/unit-tests/scenes.js", "work/unit-tests/textSequence.js", "work/unit-tests/mediaDeletion.js", "work/unit-tests/exportTiming.js", "work/unit-tests/previewPlayback.js", "work/unit-tests/background.js", "work/unit-tests/whisperLayout.js"],
   { stdio: "inherit", env: { ...process.env, NODE_ENV: "test" } },
 );
 process.exitCode = result.status ?? 1;

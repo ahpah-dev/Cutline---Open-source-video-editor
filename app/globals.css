@@ -1370,7 +1370,8 @@ summary::-webkit-details-marker {
 .property-keyframe { display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px; padding: 0; margin-left: 5px; border: 1px solid transparent; border-radius: 5px; color: #72869a; vertical-align: middle; cursor: pointer; }
 .property-keyframe:hover, .property-keyframe.active { color: var(--mint); background: #234339; border-color: #3c8069; }
 .timeline-marquee { position: fixed; z-index: 30; pointer-events: none; border: 1px solid var(--mint); background: rgba(79, 214, 161, 0.14); border-radius: 3px; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
-.subtitle-dialog { display: grid; gap: 10px; max-width: 550px; }
+.subtitle-dialog { display: grid; gap: 10px; max-width: 550px; padding: 20px 26px 0; }
+.subtitle-dialog > .dialog-actions { margin: 8px -26px 0; }
 .subtitle-dialog > p { margin: 0 0 4px; color: #aebccb; line-height: 1.55; font-size: 13px; }
 .subtitle-progress { display: flex; align-items: center; gap: 8px; padding: 12px; border: 1px solid #3b705d; border-radius: 8px; color: var(--mint); background: #193529; font-size: 13px; }
 .subtitle-error { padding: 12px; border: 1px solid #9b4c51; border-radius: 8px; color: #ffd9db; background: #482326; font-size: 13px; line-height: 1.45; }
@@ -1465,6 +1466,16 @@ summary::-webkit-details-marker {
   border-radius: 3px;
 }
 .gradient-fill-label { margin: 2px 0 9px; color: #a9b5c5; font-size: 13px; }
+.background-preview { display: block; width: 100%; height: auto; max-height: 190px; object-fit: contain; margin: 14px 0 9px; border: 1px solid var(--line); border-radius: 9px; }
+.subtitle-layout { margin: 18px 0; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-raised); }
+.subtitle-word-presets { display: flex; gap: 6px; }
+.subtitle-word-presets button { flex: 1; padding: 7px 4px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: 12px; }
+.subtitle-word-presets button.active { color: var(--mint); background: var(--mint-dim); border-color: var(--mint); }
+.subtitle-word-presets button:disabled { opacity: .5; cursor: not-allowed; }
+.subtitle-layout-preview { margin: 14px 0 8px; padding: 20px 10px; border-radius: 7px; text-align: center; background: var(--bg); }
+.subtitle-layout-preview span { color: var(--text); font-size: 16px; font-weight: 600; }
+.preview-empty.preview-empty-gradient { background: transparent; }
+.preview-empty-gradient > span, .preview-empty-gradient small { color: #fff; text-shadow: 0 1px 8px #0009; }
 .fill-mode-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; padding: 3px; border: 1px solid #34404b; border-radius: 8px; background: #111820; }
 .fill-mode-switch button { min-width: 0; padding: 7px 3px; border-radius: 5px; color: #a6b7c7; font-size: 12px; }
 .fill-mode-switch button:hover { color: #e7fff5; background: #253b36; }

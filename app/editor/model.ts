@@ -228,6 +228,33 @@ export function normalizeGradientStops(value: unknown): GradientStop[] {
   }).sort((a, b) => a.position - b.position);
   return stops.length >= 2 ? stops : DEFAULT_GRADIENT_STOPS.map((stop) => ({ ...stop }));
 }
+export type BackgroundFill = {
+  mode: TextFillMode;
+  /** 0° points right, 90° points down. */
+  angle: number;
+  centerX: number;
+  centerY: number;
+  /** Radial radius as a multiple of half the canvas diagonal. */
+  radius: number;
+  stops: GradientStop[];
+};
+export function normalizeBackgroundFill(value: unknown): BackgroundFill {
+  const raw = value && typeof value === "object" ? value as Partial<BackgroundFill> : {};
+  const bounded = (value: unknown, fallback: number, min: number, max: number) =>
+    typeof value === "number" && Number.isFinite(value) ? clamp(value, min, max) : fallback;
+  const validStops = Array.isArray(raw.stops) ? raw.stops.filter((stop) => stop &&
+    typeof stop.color === "string" && /^#[0-9a-f]{6}$/i.test(stop.color)) : [];
+  return {
+    mode: raw.mode === "linear" || raw.mode === "radial" ? raw.mode : "solid",
+    angle: bounded(raw.angle, 135, 0, 360),
+    centerX: bounded(raw.centerX, 0.5, 0, 1), centerY: bounded(raw.centerY, 0.5, 0, 1),
+    radius: bounded(raw.radius, 1, 0.1, 2),
+    stops: normalizeGradientStops(validStops.length >= 2 ? validStops : [
+      { id: "start", position: 0, color: "#182c50" },
+      { id: "end", position: 1, color: "#9855d4" },
+    ]),
+  };
+}
 export type Clip = VisualCompositing & ColorGrading & {
   id: string;
   assetId: string;
@@ -343,6 +370,7 @@ export type Project = {
   ratio: Ratio;
   fps: number;
   background: string;
+  backgroundFill: BackgroundFill;
   assets: Asset[];
   clips: Clip[];
   texts: TextClip[];
@@ -580,6 +608,7 @@ export function newProject(): Project {
     ratio: "16:9",
     fps: 30,
     background: "#080b11",
+    backgroundFill: normalizeBackgroundFill(undefined),
     assets: [],
     clips: [],
     texts: [],
@@ -1060,6 +1089,7 @@ export function migrateProject(raw: unknown, restoredAssets: Asset[]): Project {
       ? (r.ratio as Ratio)
       : "16:9",
     background: typeof r.background === "string" ? r.background : p.background,
+    backgroundFill: normalizeBackgroundFill(r.backgroundFill),
     fps: Number(r.fps) === 60 ? 60 : 30,
     assets,
     clips,

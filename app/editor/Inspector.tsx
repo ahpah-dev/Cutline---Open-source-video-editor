@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { drawProjectBackground } from "./background";
 import { CropDialog } from "./CropDialog";
 import { FULL_CROP, normalizeCrop } from "./crop";
 import { BLEND_MODES, DEFAULT_COMPOSITING, MASK_SHAPES, maskSvgPath, normalizeCompositing, type VisualCompositing } from "./visualCompositing";
@@ -55,6 +56,8 @@ import {
   clock,
   interpolatedTransform,
   normalizeGradientStops,
+  normalizeBackgroundFill,
+  dimensions,
   propertyValue,
   setPropertyKeyframe,
   togglePropertyKeyframe,
@@ -66,6 +69,7 @@ import {
   COMBO_ANIMATIONS,
   makeComboAnimation,
   type GradientStop,
+  type BackgroundFill,
   type Project,
   type Selection,
   type TextClip,
@@ -402,14 +406,8 @@ export function Inspector({
                 <option value="60">60 fps</option>
               </select>
             </Field>
-            <Color
-              label="Background"
-              value={project.background}
-              onChange={(v) =>
-                edit((p) => ({ ...p, background: v }), "background")
-              }
-            />
           </Section>
+          <ProjectBackgroundControls project={project} edit={edit} />
           <div className="inspector-tip">
             Everything stays on your device. Make a project backup to move your
             edit and its media to another computer.
@@ -1310,6 +1308,72 @@ const GRADIENT_PALETTES = [
   { name: "Ocean", colors: ["#9cefff", "#4d87e7", "#9485f9"], angle: 0 },
   { name: "Gold", colors: ["#fff8ce", "#f5bd62", "#c67830"], angle: 90 },
 ] as const;
+const BACKGROUND_PALETTES = [
+  { name: "Dusk", colors: ["#182c50", "#9855d4"], angle: 135 },
+  { name: "Sunset", colors: ["#ffcc80", "#ee648d", "#5638b5"], angle: 90 },
+  { name: "Ocean", colors: ["#051937", "#177fa0", "#8ee5ce"], angle: 45 },
+  { name: "Aurora", colors: ["#122b48", "#7358b5", "#edaccc"], angle: 135 },
+  { name: "Ember", colors: ["#291321", "#a93845", "#f5b36c"], angle: 30 },
+  { name: "Slate", colors: ["#0c1220", "#54657e"], angle: 90 },
+] as const;
+function ProjectBackgroundControls({ project, edit }: Pick<Props, "project" | "edit">) {
+  const fill = normalizeBackgroundFill(project.backgroundFill);
+  const preview = useRef<HTMLCanvasElement>(null);
+  const { background, backgroundFill } = project;
+  const { width, height } = dimensions(project.ratio, 320);
+  useEffect(() => {
+    const ctx = preview.current?.getContext("2d");
+    if (ctx) drawProjectBackground(ctx, { background, backgroundFill }, width, height);
+  }, [background, backgroundFill, width, height]);
+  const change = (patch: Partial<BackgroundFill>, group = Object.keys(patch).join()) =>
+    edit((p) => ({ ...p, backgroundFill: normalizeBackgroundFill({ ...normalizeBackgroundFill(p.backgroundFill), ...patch }) }), `background:${group}`);
+  const changeStop = (id: string, patch: Partial<Pick<GradientStop, "color" | "position">>) =>
+    edit((p) => ({ ...p, backgroundFill: normalizeBackgroundFill({ ...normalizeBackgroundFill(p.backgroundFill),
+      stops: normalizeBackgroundFill(p.backgroundFill).stops.map((stop) => stop.id === id ? { ...stop, ...patch } : stop) }) }),
+    `background:stop:${id}:${Object.keys(patch).join()}`);
+  const addStop = () => {
+    const stops = fill.stops;
+    const index = stops.slice(0, -1).map((stop, index) => ({ index, gap: stops[index + 1].position - stop.position }))
+      .sort((a, b) => b.gap - a.gap)[0].index;
+    const first = stops[index], second = stops[index + 1];
+    const color = "#" + [1, 3, 5].map((offset) => Math.round((parseInt(first.color.slice(offset, offset + 2), 16) +
+      parseInt(second.color.slice(offset, offset + 2), 16)) / 2).toString(16).padStart(2, "0")).join("");
+    change({ stops: [...stops, { id: crypto.randomUUID(), position: (first.position + second.position) / 2, color }] }, "add-stop");
+  };
+  return <Section title="Canvas background">
+    <div className="fill-mode-switch" role="group" aria-label="Background fill type">
+      {(["solid", "linear", "radial"] as const).map((mode) => <button type="button" key={mode}
+        className={fill.mode === mode ? "active" : ""} aria-pressed={fill.mode === mode}
+        onClick={() => change({ mode })}>{mode === "solid" ? "Solid" : mode === "linear" ? "Linear" : "Radial"}</button>)}
+    </div>
+    <canvas ref={preview} width={width} height={height} className="background-preview" role="img"
+      aria-label="Canvas background preview" style={{ aspectRatio: `${width} / ${height}` }} />
+    <p className="field-note">Behind all layers, including empty areas and letterboxing. Saved in your project and included in export.</p>
+    {fill.mode === "solid" ? <Color label="Background" value={project.background}
+      onChange={(background) => edit((p) => ({ ...p, background }), "background:solid-color")} /> : <>
+      <div className="gradient-presets" role="group" aria-label="Background palettes">
+        {BACKGROUND_PALETTES.map((palette) => <button type="button" key={palette.name}
+          onClick={() => change({ angle: palette.angle, stops: palette.colors.map((color, index) => ({
+            id: `palette-${index}`, position: index / (palette.colors.length - 1), color,
+          })) }, `palette:${palette.name}`)}><span style={{ background: `linear-gradient(90deg, ${palette.colors.join(", ")})` }} />{palette.name}</button>)}
+      </div>
+      {fill.mode === "linear" ? <Range label="Background angle" value={fill.angle} min={0} max={360} suffix="°"
+        onChange={(angle) => change({ angle })} /> : <>
+        <Range label="Background center X" value={fill.centerX * 100} min={0} max={100} suffix="%" onChange={(v) => change({ centerX: v / 100 })} />
+        <Range label="Background center Y" value={fill.centerY * 100} min={0} max={100} suffix="%" onChange={(v) => change({ centerY: v / 100 })} />
+        <Range label="Background radius" value={fill.radius * 100} min={10} max={200} suffix="%" onChange={(v) => change({ radius: v / 100 })} />
+      </>}
+      <div className="gradient-stop-heading"><strong>Color stops</strong><div>
+        <button type="button" aria-label="Reverse background colors" onClick={() => change({ stops: fill.stops.map((stop) => ({ ...stop, position: 1 - stop.position })) }, "reverse")}>Reverse</button>
+        <button type="button" aria-label="Add background color stop" disabled={fill.stops.length >= 8} onClick={addStop}><Plus size={13} /> Add</button>
+      </div></div>
+      <div className="gradient-stops">{fill.stops.map((stop, index) => <GradientStopRow key={stop.id} stop={stop} index={index}
+        removable={fill.stops.length > 2} keyframe={() => null} onChange={(patch) => changeStop(stop.id, patch)}
+        onRemove={() => change({ stops: fill.stops.filter((item) => item.id !== stop.id) }, `remove:${stop.id}`)} />)}</div>
+      <p className="field-note">Use 2–8 colors. Move each stop to control where the colors blend.</p>
+    </>}
+  </Section>;
+}
 function TextFillControls({ text, onChange, onStopChange, onReplaceStops, keyframe }: {
   text: TextClip;
   onChange: (patch: Partial<TextClip>, group?: string) => void;

@@ -13,6 +13,7 @@ import {
   type TextClip,
 } from "./model";
 import { FILTERS } from "./presets";
+import { drawProjectBackground } from "./background";
 import { textMotion } from "./textAnimation";
 import { segmentTextUnits, sequenceRanks, sequenceUnitMotion } from "./textSequence";
 import { normalizeCrop } from "./crop";
@@ -108,8 +109,7 @@ export class Renderer {
       h = canvas.height;
     this.bounds = [];
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = project.background;
-    ctx.fillRect(0, 0, w, h);
+    drawProjectBackground(ctx, project, w, h);
     if (this.layer.width !== w || this.layer.height !== h) {
       this.layer.width = this.temp.width = w;
       this.layer.height = this.temp.height = h;

@@ -52,6 +52,7 @@ import { runTextFontChecks } from "./text-fonts-engine";
 import { runDeletionChecks } from "./deletion-engine";
 import { runOfflineExportChecks } from "./offline-export-engine";
 import { runPlaybackSyncChecks } from "./playback-sync-engine";
+import { runBackgroundChecks } from "./background-engine";
 import type { CodexEvent, CodexStatus, CodexToolRequest, CodexToolResult } from "../app/editor/codexTypes";
 
 const assert = (condition: unknown, message: string) => {
@@ -1375,6 +1376,7 @@ export async function runEngineTests() {
   await runTextSequenceChecks(check, assert);
   await runDeletionChecks(check, assert);
   await runOfflineExportChecks(check, assert);
+  await runBackgroundChecks(check, assert);
   return { passed, failures, details };
 }
 (
@@ -1432,3 +1434,12 @@ async function runPlaybackTests() {
   return {passed,failures};
 }
 (globalThis as typeof globalThis & {runPlaybackTests:typeof runPlaybackTests}).runPlaybackTests=runPlaybackTests;
+
+async function runBackgroundTests() {
+  const passed: string[] = [], failures: string[] = [];
+  await runBackgroundChecks(async (name, run) => {
+    try { await run(); passed.push(name); } catch (error) { failures.push(`${name}: ${String((error as Error).stack ?? error)}`); }
+  }, assert);
+  return { passed, failures };
+}
+(globalThis as typeof globalThis & { runBackgroundTests: typeof runBackgroundTests }).runBackgroundTests = runBackgroundTests;

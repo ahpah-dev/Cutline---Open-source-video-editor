@@ -1,6 +1,24 @@
-# Cutline 0.8.7
+# Cutline 0.8.8
 
 A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. Optional AI editing uses either your Codex account/usage limits or a custom API, whose provider may charge. The hosted development site uses its existing private Sites access policy. Original source files and raw audio stay local; the optional assistant receives project metadata, permitted images, transcripts and audio-analysis results.
+
+## Whisper caption line length (new in 0.8.8)
+
+Open **Captions → Auto subtitles → Words per line**. Choose 1–20 words, or use the 1/3/5/7-word presets. This is a maximum for each new one-line caption; pauses and timing may create shorter cards. The default is seven words, and your preference is remembered locally. Existing captions are not modified. The setting is locked while transcribing; generated text remains editable and all captions are added in one Undo step.
+
+Tiny's native word timestamps are retained. The current Large q4f16 model returns segment timestamps; words within those segments are evenly timed estimates when split into shorter cards. Text-only fallback output uses the original decoded audio duration, not the detached worker-transfer buffer. Counts use whitespace-delimited words and preserve Unicode/punctuation. A high word count or very long words may need a smaller font or fewer words to fit your chosen canvas. Review timing and recognition before exporting; no new model, API key or speech-service upload is required.
+
+![Whisper words-per-line controls](docs/screenshots/whisper-line-layout.png)
+
+## Canvas gradient backgrounds (new in 0.8.8)
+
+Deselect the current clip/text layer, then open **Inspector → Canvas background**. Choose **Solid**, **Linear** or **Radial**. Six palettes provide starting points; edit 2–8 color stops with exact hex colors and positions, add/remove stops or reverse their order. Linear gradients have an angle (0° right, 90° down); radial gradients have adjustable X/Y center and radius. Switching to Solid preserves your gradient settings and the original solid color.
+
+The canvas background sits behind every visual layer, including transparent media, letterboxing and timeline gaps. Controls are keyboard-accessible and changes support normal Undo/Redo. Settings survive autosave and project backups; older projects retain their existing solid background. The player, inspector swatch, AI previews and MP4/WebM exports use the same canvas renderer. A background alone does not create timeline duration; add media or a text layer to define your edit's duration.
+
+AI project edits support a partial `backgroundFill` object: `mode`, `angle`, `centerX`, `centerY`, `radius`, and `stops` (`id`, `color`, `position`). Coordinates/stop positions are 0–1; radius is 0.1–2 times half the canvas diagonal. The existing `background` field remains the solid color. A legacy AI edit of only `background` switches back to Solid.
+
+![Canvas gradient controls](docs/screenshots/gradient-background.png)
 
 ## Custom AI APIs and 9Router (new in 0.8.7)
 

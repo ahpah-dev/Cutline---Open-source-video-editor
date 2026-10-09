@@ -2,7 +2,7 @@ import { normalizeCrop } from "./crop";
 import { CURVE_CHANNELS, GRADE_RANGES, normalizeGrade } from "./colorGrading";
 import { BLEND_MODES, MASK_SHAPES, normalizeCompositing } from "./visualCompositing";
 import {
-  clipDuration, COMBO_ANIMATIONS, endOf, freezeFrame, makeClip, makeText, normalizeGradientStops,
+  clipDuration, COMBO_ANIMATIONS, endOf, freezeFrame, makeClip, makeText, normalizeGradientStops, normalizeBackgroundFill,
   projectDuration, roundFrame, setJoinTransition, setPropertyKeyframe, splitItem, transitionSource,
   uid, type Clip, type Project, type TextClip,
 } from "./model";
@@ -78,6 +78,11 @@ const clipFields: Record<string, Schema> = {
 const projectFields = {
   name: string(), ratio: choices(["16:9", "9:16", "1:1", "4:5"]),
   fps: { type: "integer", enum: [30, 60] } as Schema, background: color,
+  backgroundFill: object({ mode: choices(["solid", "linear", "radial"]),
+    angle: number(0, 360, "0 points right; 90 points down."), centerX: number(0, 1), centerY: number(0, 1),
+    radius: number(0.1, 2, "Multiple of half the canvas diagonal."),
+    stops: { ...array(object({ id: string(), color, position: number(0, 1) }, ["color", "position"]), 8), minItems: 2 },
+  }),
 };
 const animationSettings = object({
   angle: number(-360, 360), distance: number(0, 1), zoomAmount: number(0, 2),
@@ -160,7 +165,7 @@ export function projectRevision(project: Project) {
 export function projectSnapshot(project: Project) {
   return {
     projectId: project.id, revision: projectRevision(project), name: project.name,
-    ratio: project.ratio, fps: project.fps, background: project.background,
+    ratio: project.ratio, fps: project.fps, background: project.background, backgroundFill: normalizeBackgroundFill(project.backgroundFill),
     duration: projectDuration(project), layerCount: project.layerCount,
     mutedTracks: project.mutedTracks, hiddenTracks: project.hiddenTracks, lockedTracks: project.lockedTracks ?? [],
     assets: project.assets.map(({ id, name, kind, duration, width, height, audioPeak }) => ({ id, name, kind, duration, width, height, audioPeak })),
@@ -172,6 +177,7 @@ export function projectSnapshot(project: Project) {
 export function editingCatalog(fonts = FONTS) {
   return {
     locking: "Respect lockedTracks from get_project. Item edits, additions, removals and moves into locked layers reject atomically. Never unlock a layer just to complete another edit; only use layer locked:false when the user explicitly requests unlocking.",
+    background: "Project backgroundFill renders behind every layer in preview and export. Its mode is solid/linear/radial. Solid uses project.background (#RRGGBB). angle: 0 right, 90 down; centerX/Y: 0–1 canvas fractions; radial radius: 0.1–2 times half the diagonal. stops: 2–8 colors with positions 0–1. A project operation merges a partial backgroundFill patch with existing settings; switching to solid preserves gradient settings. This is the canvas background, not the text's own fill or backing box.",
     units: { time: "Seconds on the timeline, aligned to project frames.", markers: "The get_project snapshot includes markers [{kind:'beat'|'moment', time: seconds}]. These are manual and automatically detected timing guides.", tracks: "0-based universal layers; higher tracks are in front. Video, text and audio may share any layer. lockedTracks lists protected layer:N keys.", textPosition: "x/y are fractions of canvas dimensions; 0.5/0.5 centers text.", clipPosition: "x/y are offsets from canvas center; 0/0 centers media.", mask: "maskSpace content (default) follows the item's rendered bounds, rotation, scale, animation and flips; canvas uses the output frame. maskX/Y .5/.5 centers; maskWidth/Height are reference fractions; maskRotation adds degrees; maskFeather is a fraction of the shorter reference dimension. Linear reveals below its rotated center; Mirror reveals a band of maskHeight.", chroma: "Chroma key compares original media colors before grading/effects. chromaTolerance and chromaSoftness are normalized RGB distance; chromaSpill suppresses key color in partially transparent edges.", audioPan: "-1 left, 0 center, 1 right.", opacity: "0–1", fontSize: "Pixels at 1920px canvas width", color: "#RRGGBB" },
     rules: ["Use get_project immediately before apply_edits.", "Existing project markers identify user-marked song beats and important moments; preserve and use their kind and time as timing guides when planning edits and animations.", "Use exact IDs, or @ref for creations earlier in a batch.", "For add_text, add_clip and update, styling properties can be placed directly on the operation. A nested patch is also accepted; direct properties win.", "All operations in a batch commit together and undo together.", "A transition attaches to an incoming visual clip touching a preceding clip on the same track. Duration is at most 3 seconds and cannot exceed either clip length.", "Freeze inserts a held frame inside a video and shifts subsequent items on that layer by its duration.", "Overlapping visuals on the same track use the later-starting clip; use different tracks for overlays.", "Gradient stops can be keyframed with gradientStop:STOP_ID:color or gradientStop:STOP_ID:position.", "Only already imported assets can be inserted. Ask the user to import missing media.", "No shell commands, source-code edits, downloads, or filesystem access are needed to edit the video."],
     examples: [{ op: "add_text", ref: "title", text: "Hello", start: 0, duration: 3, track: 1, x: 0.5, y: 0.5, fontSize: 96, color: "#ffffff" }, { op: "animation", id: "@title", phase: "Entrance", duration: 0.6, layers: [{ name: "Letter Pop In" }] }, { op: "update", id: "EXACT_ITEM_ID", opacity: 0.75 }],
@@ -222,7 +228,12 @@ export function applyCodexEdits(project: Project, input: unknown) {
       let resultId: string | undefined;
       if (op.ref && Object.hasOwn(aliases, op.ref)) throw new Error("Duplicate ref: " + op.ref);
       if (op.op === "project") {
-        next = { ...next, ...op.patch } as Project;
+        const patch = op.patch!;
+        next = { ...next, ...patch, backgroundFill: normalizeBackgroundFill({ ...normalizeBackgroundFill(next.backgroundFill),
+          ...(patch.backgroundFill as Record<string, unknown> | undefined),
+          // A legacy solid-color project edit should remain visibly effective.
+          ...(patch.background !== undefined && patch.backgroundFill === undefined ? { mode: "solid" } : {}),
+        }) } as Project;
       } else if (op.op === "layer") {
         const layer = "layer:" + op.track;
         if (op.locked !== false && (op.muted !== undefined || op.hidden !== undefined)) assertEditableLayer(op.track as number);

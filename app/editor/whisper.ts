@@ -2,6 +2,22 @@ import { clamp, clipDuration, makeText, type Asset, type Clip, type TextClip } f
 import { loadMediaAsset } from "../editorStorage";
 
 export type WhisperChunk = { text: string; timestamp: [number, number | null] };
+export const DEFAULT_SUBTITLE_WORDS_PER_LINE = 7;
+export function normalizeSubtitleWordsPerLine(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.round(clamp(value, 1, 20)) : DEFAULT_SUBTITLE_WORDS_PER_LINE;
+}
+const SUBTITLE_LAYOUT_KEY = "cutline.subtitleWordsPerLine.v1";
+export function readSubtitleWordsPerLine(): number {
+  if (typeof window === "undefined") return DEFAULT_SUBTITLE_WORDS_PER_LINE;
+  try {
+    const saved = window.localStorage.getItem(SUBTITLE_LAYOUT_KEY);
+    return saved === null ? DEFAULT_SUBTITLE_WORDS_PER_LINE : normalizeSubtitleWordsPerLine(Number(saved));
+  } catch { return DEFAULT_SUBTITLE_WORDS_PER_LINE; }
+}
+export function saveSubtitleWordsPerLine(value: number): void {
+  try { window.localStorage.setItem(SUBTITLE_LAYOUT_KEY, String(normalizeSubtitleWordsPerLine(value))); } catch { /* Optional preference; never block transcription. */ }
+}
 
 /** Decode the imported local media and resample exactly the selected edit to Whisper's 16 kHz mono input. */
 export async function decodeClipAudio(clip: Clip, asset: Asset, options:{signal?:AbortSignal;maxDuration?:number} = {}): Promise<Float32Array> {
@@ -48,27 +64,42 @@ export async function decodeClipAudio(clip: Clip, asset: Asset, options:{signal?
   }
 }
 
-/** Form readable 2–5 second caption cards from Whisper's timestamped words. */
-export function wordsToCaptions(chunks: WhisperChunk[], clipStart: number, clipLength: number, track: number): TextClip[] {
-  const words = chunks.filter((chunk) => chunk.text.trim() && Number.isFinite(chunk.timestamp?.[0]))
-    .map((chunk) => ({ text: chunk.text.trim(), start: clamp(chunk.timestamp[0], 0, clipLength), end: clamp(chunk.timestamp[1] ?? chunk.timestamp[0] + 0.5, 0, clipLength) }))
-    .filter((word) => word.start < clipLength);
+/** One-line caption cards. Real word times are preserved; multiword segments
+ * (Large q4f16/fallback output) are split with estimated within-segment timing. */
+export function wordsToCaptions(chunks: WhisperChunk[], clipStart: number, clipLength: number, track: number,
+  options: { wordsPerLine?: number } = {}): TextClip[] {
+  if (!Number.isFinite(clipLength) || clipLength <= 0) return [];
+  const limit = normalizeSubtitleWordsPerLine(options.wordsPerLine);
+  const timed = chunks.filter((chunk) => typeof chunk.text === "string" && chunk.text.trim() && Number.isFinite(chunk.timestamp?.[0]))
+    .sort((a, b) => a.timestamp[0] - b.timestamp[0]);
+  const words = timed.flatMap((chunk, index) => {
+    const start = clamp(chunk.timestamp[0], 0, clipLength);
+    if (start >= clipLength) return [];
+    const next = timed[index + 1]?.timestamp[0];
+    const fallbackEnd = Number.isFinite(next) && next > start ? next : clipLength;
+    const end = clamp(typeof chunk.timestamp[1] === "number" && Number.isFinite(chunk.timestamp[1]) && chunk.timestamp[1] > start
+      ? chunk.timestamp[1] : fallbackEnd, start, clipLength);
+    const tokens = chunk.text.trim().replace(/\s+([,.!?;:])/g, "$1").split(/\s+/u);
+    return tokens.map((text, i) => ({ text, start: start + (end - start) * i / tokens.length,
+      end: start + (end - start) * (i + 1) / tokens.length }));
+  });
   const groups: typeof words[] = [];
   let group: typeof words = [];
   for (const word of words) {
-    if (group.length && (word.start - group[0].start >= 3.6 || group.length >= 7 || word.start - group.at(-1)!.end > 0.75)) {
+    if (group.length && (word.start - group[0].start >= 3.6 || group.length >= limit || word.start - group.at(-1)!.end > 0.75)) {
       groups.push(group);
       group = [];
     }
     group.push(word);
   }
   if (group.length) groups.push(group);
-  return groups.map((part) => {
+  return groups.map((part, index) => {
     const start = part[0].start;
     const end = Math.max(part.at(-1)!.end, start + 0.5);
+    const nextStart = groups[index + 1]?.[0].start ?? clipLength;
     return makeText(clipStart + start, {
       kind: "caption", label: "Auto subtitle", text: part.map((word) => word.text).join(" ").replace(/\s+([,.!?;:])/g, "$1"),
-      duration: Math.max(0.15, Math.min(end + 0.12, clipLength) - start), track,
+      duration: Math.max(1 / 60, Math.min(end + 0.12, clipLength, nextStart) - start), track,
       fontSize: 48, y: 0.84, background: true,
     });
   });

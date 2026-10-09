@@ -568,7 +568,7 @@ export function Preview({
             </div>
           )}
           {duration === 0 && (
-            <div className="preview-empty">
+            <div className={"preview-empty" + (project.backgroundFill && project.backgroundFill.mode !== "solid" ? " preview-empty-gradient" : "")}>
               <span>Your next great edit</span>
               <small>Import media or add a text layer to begin.</small>
             </div>
