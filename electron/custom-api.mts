@@ -131,7 +131,9 @@ export class CustomAPIConnection {
       },
       toModelOutput: ({output}) => ({type:"text", value:JSON.stringify({success:(output as CodexToolResult).success, contentItems:(output as CodexToolResult).contentItems.filter(item=>item.type === "inputText")})}),
     })]));
-    const provider = createOpenAICompatible({name:"cutline-custom", baseURL:config.baseURL, apiKey:config.apiKey, fetch:(input,init)=>this.request(input,init), transformRequestBody:body=>({...body, parallel_tool_calls:false, ...(effort ? {reasoning_effort:effort} : {})})});
+    // agent.generate() consumes one JSON completion per step. Some 9Router
+    // versions stream if this field is omitted, despite OpenAI's false default.
+    const provider = createOpenAICompatible({name:"cutline-custom", baseURL:config.baseURL, apiKey:config.apiKey, headers:{Accept:"application/json"}, fetch:(input,init)=>this.request(input,init), transformRequestBody:body=>({...body, stream:false, parallel_tool_calls:false, ...(effort ? {reasoning_effort:effort} : {})})});
     const agent = new ToolLoopAgent({model:provider.chatModel(selected.id), instructions:INSTRUCTIONS + MEDIA_INSTRUCTIONS + " Reply in concise plain text. The custom API uses a model chosen by the user; never assume its vision or reasoning capabilities.", tools, maxRetries:0, maxOutputTokens:8192, stopWhen:isStepCount(24),
       prepareStep: ({messages}) => {
         active();

@@ -1,6 +1,12 @@
-# Cutline 0.8.8
+# Cutline
 
 A free, device-local video editor for Windows and the web. Core editing and export require no subscription or account and have no watermark. Optional AI editing uses either your Codex account/usage limits or a custom API, whose provider may charge. The hosted development site uses its existing private Sites access policy. Original source files and raw audio stay local; the optional assistant receives project metadata, permitted images, transcripts and audio-analysis results.
+
+## Open the web editor
+
+**[Launch Cutline in your browser](https://ahpah-dev.github.io/Cutline---Open-source-video-editor/)** — no install or account needed. This is the actual editor, not a download landing page. Use current desktop Chrome or Edge for browser-supported video export. Projects and imported media stay in this browser; use **Backup** to transfer them to another device or the Windows app. Clearing site data can remove projects. AI connections require the Windows app; local ML features download models only when requested.
+
+GitHub Pages hosts the public editor application, not your media or projects. The existing marketing website and private development site are separate. See [web features, limitations and build/deployment instructions](docs/WEB-EDITOR.md).
 
 ## Whisper caption line length (new in 0.8.8)
 

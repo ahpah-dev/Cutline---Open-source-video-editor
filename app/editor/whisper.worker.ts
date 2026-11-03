@@ -11,7 +11,11 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     const { audio, model, runtimeUrl } = event.data;
     // Serve the matching ONNX runtime beside the app. A third-party CDN is not
     // required to start transcription, even on restricted networks.
-    if (env.backends.onnx.wasm) env.backends.onnx.wasm.wasmPaths = runtimeUrl;
+    if (env.backends.onnx.wasm) {
+      env.backends.onnx.wasm.wasmPaths = runtimeUrl;
+      // Static hosts such as GitHub Pages do not supply COOP/COEP headers.
+      if (!self.crossOriginIsolated) env.backends.onnx.wasm.numThreads = 1;
+    }
     if (!transcriber || currentModel !== model) {
       stage = "loading the Whisper model";
       self.postMessage({ type: "status", message: "Downloading Whisper model…" });

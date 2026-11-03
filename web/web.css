@@ -1,0 +1,11 @@
+.web-welcome { width: min(560px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow: auto; margin: auto; padding: 30px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 24px 100px #0009; }
+.web-welcome::backdrop { background: #05080bd9; backdrop-filter: blur(8px); }
+.web-edition { color: var(--mint); font-size: 10px; letter-spacing: .16em; font-weight: 600; }
+.web-welcome h1 { margin: 12px 0; font: 600 clamp(25px, 4vw, 32px)/1.2 "Manrope Variable", var(--font); letter-spacing: -.04em; }
+.web-welcome p, .web-welcome li { color: var(--muted); line-height: 1.65; }
+.web-welcome ul { display: grid; gap: 14px; padding-left: 19px; margin: 24px 0; }
+.web-welcome strong { color: var(--text); font-weight: 550; }
+.web-welcome-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.web-welcome a, .web-error a { color: var(--mint); text-underline-offset: 4px; }
+.web-error { max-width: 640px; margin: 12vh auto; padding: 30px; line-height: 1.7; }
+.web-error a { display: block; margin-top: 18px; }

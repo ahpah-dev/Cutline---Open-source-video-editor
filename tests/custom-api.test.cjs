@@ -18,7 +18,7 @@ async function fixture(handler,runTool=async(name)=>textResult(name)) {
   const server=http.createServer(async(req,res)=>{
     let raw="";for await(const chunk of req)raw+=chunk;
     const body=raw ? JSON.parse(raw):null;
-    requests.push({url:req.url,method:req.method,authorization:req.headers.authorization,body});
+    requests.push({url:req.url,method:req.method,authorization:req.headers.authorization,accept:req.headers.accept,body});
     res.setHeader("content-type","application/json");
     if(req.url === "/v1/models") {res.end(JSON.stringify({data:[{id:"router/combo"},{id:"router/vision"},{id:"router/combo"}]}));return;}
     try {await handler(body,res,requests);} catch {res.statusCode=500;res.end("{}");}
@@ -85,6 +85,27 @@ test("manual model IDs bypass missing discovery and arbitrary provider IDs are k
     await assert.rejects(f.connection.send("Edit","p","unknown"),/available API model/);
     await assert.rejects(f.connection.send("Edit","p",undefined,"high"),/reasoning effort/);
     await assert.rejects(f.connection.connect([...TOOLS.slice(1),TOOLS[1]],f.config),/Invalid Cutline/);
+  } finally {await f.close();}
+});
+
+test("9Router's omitted-stream framing bug cannot break a connected agent's first message",async()=>{
+  // Reproduce decolua/9router#3492: omitted stream produces JSON + an SSE
+  // terminator instead of one JSON completion. Discovery still succeeds.
+  const f=await fixture(async(body,res)=>{
+    const response=JSON.stringify(completion(body,body.tool_choice?.function?.name));
+    if(body.stream !== false){
+      res.setHeader("content-type","text/event-stream");
+      res.end(response+"data: [DONE]\n\n");
+    }else res.end(response);
+  });
+  try {
+    await f.connection.connect(TOOLS,{...f.config,model:""});
+    assert.equal(f.connection.state.connected,true);
+    await f.connection.send("Inspect the project","p");
+    assert.deepEqual(f.calls.map(c=>c.name),["cutline_get_project","cutline_get_catalog"]);
+    assert.ok(f.requests.filter(r=>r.method === "POST").every(r=>r.body.stream === false && r.accept === "application/json"));
+    assert.ok(f.events.some(e=>e.type === "message" && e.text === "Done."));
+    assert.equal(f.connection.state.busy,false);
   } finally {await f.close();}
 });
 test("vision tool frames become actual image_url inputs, not JSON or fake image descriptions",async()=>{

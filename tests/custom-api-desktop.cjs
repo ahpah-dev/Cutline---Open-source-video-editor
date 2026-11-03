@@ -16,6 +16,9 @@ const server=http.createServer(async(req,res)=>{
   let raw="";for await(const chunk of req)raw+=chunk;
   const body=JSON.parse(raw);requests.push(body);
   assert.equal(req.headers.authorization,"Bearer "+secret);
+  // Mirror 9Router's omitted-stream bug through the real desktop IPC path.
+  if(body.stream !== false){res.setHeader("content-type","text/event-stream");res.end('data: [DONE]\n\n');return;}
+  assert.equal(req.headers.accept,"application/json");
   const messages=body.messages;
   const previous=messages.filter(message=>message.role === "tool");
   let name=body.tool_choice?.function?.name,args={};
